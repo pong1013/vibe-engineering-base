@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Workflow"
+  short_description: "Safely change and verify the project workflow"
+  default_prompt: "Use $project-workflow to implement and verify this project change."
