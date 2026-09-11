@@ -5,6 +5,7 @@
 - Inspect the existing implementation, nearby documentation, and repository state before changing code.
 - Make the smallest coherent change that satisfies the request, and preserve unrelated user work.
 - Keep architecture explanations in project documentation instead of expanding this file with one-off details.
+- Read `.agents/project-contract.md` for workflow-facing verification, knowledge, workspace, and delivery entrypoints.
 
 ## Safety and compatibility
 

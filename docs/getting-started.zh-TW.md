@@ -2,7 +2,7 @@
 
 [English](./getting-started.md) | [繁體中文](./getting-started.zh-TW.md) | [回到 README](../README.zh-TW.md)
 
-這份逐步教學會帶你把 `vibe-engineering-base` 改成專案專屬的 repository，並開始使用推薦的開發流程。
+這份教學會把 `vibe-engineering-base` 客製化成 Codex 能獨立理解並驗證的專案。
 
 ## 前置需求
 
@@ -10,13 +10,13 @@
 - Codex Desktop、CLI 或 IDE extension。
 - Bash 3.2 以上的 macOS，或使用 Bash 的 Linux。
 
-這個專案範本不限制程式語言、package manager 或 framework。
+Base 不限制程式語言、package manager 或 framework。
 
 ## 1. 建立 repository
 
-推薦做法是開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template**，再建立新的 repository。Clone 或在本機開啟新 repository，並從根目錄啟動 Codex，讓 Codex 能發現 `AGENTS.md` 與 `.agents/skills/`。
+開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template** 並建立新 repository。Clone 後從 repository root 在 Codex 開啟。
 
-如果沒有看到 template 按鈕，可以使用以下替代流程：
+如果沒有 template 按鈕：
 
 ```bash
 git clone https://github.com/pong1013/vibe-engineering-base.git my-project
@@ -24,9 +24,9 @@ cd my-project
 git remote remove origin
 ```
 
-先建立新專案的目的 repository，再加入它的 remote。
+先建立目的 repository，再加入它的 remote。
 
-## 2. 確認初始狀態
+## 2. 確認 bootstrap
 
 執行：
 
@@ -34,28 +34,31 @@ git remote remove origin
 make verify
 ```
 
-第一次執行會顯示 Harness 與 repository Skills 已通過，但 project checks 尚未設定。這是一個刻意保留的成功狀態。它證明專案範本能正常運作，不代表產品測試、lint 或 build 已執行。
+第一次會顯示 Harness、repository Skills 與 Project Contract 通過，但產品 checks 尚未設定。這證明範本可運作，不代表產品測試、lint 或 build 已執行。
 
-## 3. 加入專案資訊與規則
+輸出也會包含 `HARNESS_VERIFICATION_STATUS=bootstrap`。即使 bootstrap 自我檢查的 exit code 是成功，Workflow controller 仍必須將此狀態視為不完整。
 
-將根目錄的 README 換成產品真正的介紹與設定方式。接著替換 `AGENTS.md` 的 `Project-specific guidance`，寫入幾乎每次修改都需要遵守的架構邊界、標準命令、相容性需求與不變條件。
+## 3. 加入專案資訊與長期規則
 
-每項設定的完整說明與適合的位置，請查閱[客製化參考](./customization.zh-TW.md)。
+用產品真正的介紹與設定方式取代根目錄 README。將 `AGENTS.md` 的 `Project-specific guidance` 換成幾乎每次修改都適用的架構邊界、標準命令、相容性需求與不變條件。
 
-## 4. 接上 project checks
+## 4. 設定 Project Contract
 
-初始的 `scripts/harness/project-checks.sh` 使用以下停用狀態：
+編輯 `.agents/project-contract.md`：
 
-```bash
-PROJECT_CHECKS_CONFIGURED=0
+- 產品 checks 尚未接上前，保留 `Status: bootstrap`，將 Bootstrap verification 設為 `make verify`，並保留 `Complete verification: unconfigured`。
+- 讓 Knowledge 指向真正的專案指引、domain 語言與 ADR 位置。
+- 選擇 specification 位置，並在存在 tracker 時設定 ticket backend。
+- 只有專案真的有政策時才記錄 workspace 或 branch naming。
+- Delivery mode 選擇 `none`、`commit-only`、`push`、`pull-request` 或 `merge-request`。
 
-if [[ "${PROJECT_CHECKS_CONFIGURED}" != "1" ]]; then
-  echo "WARNING: project checks are not configured. Edit scripts/harness/project-checks.sh." >&2
-  exit 0
-fi
-```
+未知值在決策完成前保持 unconfigured。Contract 是精簡索引，不是第二份架構文件。
 
-將 placeholder 換成專案真正使用的命令，並把設定值改成 `1`。Node.js 專案可以使用這個精簡版本：
+## 5. 接上產品 checks
+
+編輯 `scripts/harness/project-checks.sh`，用真正的命令取代停用區塊，並設定 `PROJECT_CHECKS_CONFIGURED=1`。
+
+Node.js 範例：
 
 ```bash
 #!/usr/bin/env bash
@@ -69,7 +72,7 @@ npm test
 npm run build
 ```
 
-Python 專案可以使用：
+Python 範例：
 
 ```bash
 #!/usr/bin/env bash
@@ -82,63 +85,22 @@ python -m ruff check .
 python -m pytest
 ```
 
-請使用專案原本的標準命令，不要直接複製專案沒有採用的工具。保留 `set -euo pipefail`。第一個失敗的命令會保留非零結果，讓 `make verify` 與 CI 明確失敗。
+使用 repository 原本的標準工具，並保留非零 exit status。詳情請閱讀 [Harness 參考](./harness.zh-TW.md)。
 
-[Harness 參考](./harness.zh-TW.md)說明每種驗證狀態、CI 行為與診斷設定。
+接著把 Project Contract 改成 `Status: complete`，並將 Complete verification 設成 `make verify`。只有這個狀態才能讓 controller 進入 Delivery。
 
-## 5. 檢查 Skills 並完成設定
+## 6. 檢查 repository Skills
 
-閱讀 [Skills 指南](./skills.zh-TW.md)，再依專案需求保留、修改或移除內建 Skills。重新執行 `make verify`，確認摘要顯示 `Project checks: passed` 與 `Overall: verification passed`。
+閱讀 [Skills 指南](./skills.zh-TW.md)。如果專案應該從具體開發證據持續學習，就保留 `harness-feedback`；不需要時則移除。只有可重複的專案特定判斷才新增 repository Skill。
 
-Commit 客製化後的基礎設定前，完成以下清單：
+重新執行 `make verify`。設定完整的專案應顯示 `Project checks: passed` 與 `Overall: verification passed`。
+
+## 完成清單
 
 - [ ] 已用產品 README 取代範本首頁。
-- [ ] `AGENTS.md` 已描述實際的專案規則與標準命令。
-- [ ] 已設定 `PROJECT_CHECKS_CONFIGURED=1`，而且 project checks 會執行真正的命令。
-- [ ] 已確認內建 Skills 是否符合專案工作流程。
-- [ ] 本機執行 `make verify` 會顯示完整驗證通過。
-- [ ] CI 使用相同的 `make verify` 入口。
-
-## 推薦開發流程
-
-依照變更的不確定性與風險，選擇足夠且最輕量的流程。
-
-```text
-需求是否明確且風險低？
-├── 是 → 請 Codex 實作並驗證結果。
-└── 否，或變更影響重大
-    └── 呼叫 $grill-with-docs
-        ├── Codex 先檢查 repository 中可查明的事實
-        ├── Codex 每次提出一個決策問題與建議答案
-        ├── 你確認或修正決策
-        ├── 記錄需要長期保存的術語與 ADR
-        └── 持續進行，直到重要分支都已確定
-```
-
-新產品方向、大型功能、domain 語言不清或重要架構選擇適合使用 `$grill-with-docs`。小型 bug 或結果已經明確的例行修改通常不需要使用。
-
-討論完成後留在同一個對話，讓尚未寫入檔案的決策仍可使用。接著要求 Codex：
-
-```text
-根據剛才確定的決策，整理一份可 review 的實作計畫，先不要實作。
-```
-
-確認計畫後，再要求開始實作。`0.1.0` 尚未內建 `to-spec`、`to-tickets` 或完整的開發 Skill 流程。
-
-## 常見問題
-
-### 為什麼第一次執行 `make verify` 會警告，卻仍成功結束？
-
-這個警告代表專案仍在初始設定階段。範本可以先驗證自己的 Harness 與 Skills，但還不知道衍生專案使用什麼語言與命令。
-
-### 為什麼沒有執行產品測試，CI 仍是綠燈？
-
-CI 已設定執行 `make verify`，但初始的 project checks 沒有產品命令。完成 `project-checks.sh` 前，綠燈只代表範本本身正常；完成設定後，才包含你加入的產品檢查。
-
-### 第一個功能需要使用 `$grill-with-docs` 嗎？
-
-如果重要行為、術語或取捨還沒確定，就適合使用。例如：
-
-```text
-$grill-with-docs 我想新增團隊邀請功能。請先檢查 repository，再協助我確定使用者流程、術語、授權邊界與重要失敗情境，暫時不要實作。
-```
+- [ ] `AGENTS.md` 描述真正的專案規則。
+- [ ] `.agents/project-contract.md` 指向實際的命令、位置與政策。
+- [ ] 已設定 `PROJECT_CHECKS_CONFIGURED=1`，而且產品 checks 會執行真正命令。
+- [ ] 已檢查 repository Skills。
+- [ ] 本機 `make verify` 顯示完整驗證通過。
+- [ ] CI 使用同一個 `make verify` 入口。

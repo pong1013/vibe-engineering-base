@@ -25,6 +25,19 @@ fi
 echo "Validating active repository Skills..."
 bash "${ROOT_DIR}/scripts/harness/validate-skills.sh"
 
+echo "Validating Project Contract..."
+bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh"
+contract_file="${HARNESS_PROJECT_CONTRACT:-${ROOT_DIR}/.agents/project-contract.md}"
+contract_status="$(awk '
+  $0 == "## Verification" { inside = 1; next }
+  /^## / { inside = 0 }
+  inside && /^- Status: / {
+    sub(/^- Status: /, "")
+    print
+    exit
+  }
+' "${contract_file}")"
+
 default_project_checks="${ROOT_DIR}/scripts/harness/project-checks.sh"
 project_checks="${HARNESS_PROJECT_CHECKS:-${default_project_checks}}"
 if [[ ! -f "${project_checks}" ]]; then
@@ -60,10 +73,18 @@ echo
 echo "Verification summary:"
 echo "  Harness checks: passed"
 echo "  Repository Skills: passed"
+echo "  Project Contract: passed"
+echo "  Contract verification status: ${contract_status}"
 if [[ "${project_checks_state}" == "not-configured" ]]; then
   echo "  Project checks: not configured"
   echo "  Overall: bootstrap ready; project verification is incomplete"
+  echo "HARNESS_VERIFICATION_STATUS=bootstrap"
+elif [[ "${contract_status}" == "bootstrap" ]]; then
+  echo "  Project checks: passed"
+  echo "  Overall: project checks passed; contract remains bootstrap"
+  echo "HARNESS_VERIFICATION_STATUS=bootstrap"
 else
   echo "  Project checks: passed"
   echo "  Overall: verification passed"
+  echo "HARNESS_VERIFICATION_STATUS=complete"
 fi

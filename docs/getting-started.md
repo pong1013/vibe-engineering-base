@@ -2,7 +2,7 @@
 
 [English](./getting-started.md) | [繁體中文](./getting-started.zh-TW.md) | [Back to README](../README.md)
 
-This step-by-step tutorial turns `vibe-engineering-base` into a project-specific repository and introduces the recommended development flow.
+This tutorial turns `vibe-engineering-base` into an independently understandable and verifiable project for Codex.
 
 ## Prerequisites
 
@@ -14,9 +14,9 @@ The base does not impose an application language, package manager, or framework.
 
 ## 1. Create the repository
 
-The recommended path is to open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create a new repository. Clone or open the result locally, then start Codex at its root so Codex can discover `AGENTS.md` and `.agents/skills/`.
+Open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create a new repository. Clone or open it in Codex at the repository root.
 
-If the template button is unavailable, use this alternative:
+If the template button is unavailable:
 
 ```bash
 git clone https://github.com/pong1013/vibe-engineering-base.git my-project
@@ -24,7 +24,7 @@ cd my-project
 git remote remove origin
 ```
 
-Create the destination repository before adding the new project's remote.
+Create the destination repository before adding its remote.
 
 ## 2. Confirm the bootstrap
 
@@ -34,28 +34,31 @@ Run:
 make verify
 ```
 
-The initial result reports that the Harness and repository Skills pass while project checks are not configured. This is intentionally a successful bootstrap state. It proves the template works, but it does not claim that product tests, lint, or build ran.
+The initial result reports that the Harness, repository Skills, and Project Contract pass while product checks are not configured. This proves the template works; it does not claim that product tests, lint, or build ran.
 
-## 3. Add project identity and rules
+It also emits `HARNESS_VERIFICATION_STATUS=bootstrap`. Workflow controllers must treat that value as incomplete even though the bootstrap self-check exits successfully.
 
-Replace the root README files with the product's actual introduction and setup instructions. Then replace the `Project-specific guidance` section in `AGENTS.md` with the architecture boundaries, canonical commands, compatibility requirements, and invariants that apply to nearly every change.
+## 3. Add project identity and durable rules
 
-For every available setting and where it belongs, use the [Customization reference](./customization.md).
+Replace the root README files with the product's introduction and setup instructions. Replace `AGENTS.md`'s `Project-specific guidance` with architecture boundaries, canonical commands, compatibility requirements, and invariants that apply to nearly every change.
 
-## 4. Connect project checks
+## 4. Configure the Project Contract
 
-The initial `scripts/harness/project-checks.sh` contains the following disabled state:
+Edit `.agents/project-contract.md`:
 
-```bash
-PROJECT_CHECKS_CONFIGURED=0
+- Keep `Status: bootstrap`, set Bootstrap verification to `make verify`, and keep `Complete verification: unconfigured` until product checks are connected.
+- Point Knowledge entries at the repository's actual instructions, domain language, and ADR locations.
+- Choose where specifications live and configure a ticket backend when one exists.
+- Record workspace or branch naming only when the project has a real policy.
+- Select `none`, `commit-only`, `push`, `pull-request`, or `merge-request` as the delivery mode.
 
-if [[ "${PROJECT_CHECKS_CONFIGURED}" != "1" ]]; then
-  echo "WARNING: project checks are not configured. Edit scripts/harness/project-checks.sh." >&2
-  exit 0
-fi
-```
+Keep unknown values unconfigured until they are settled. The contract is a thin index, not a second architecture document.
 
-Replace the placeholder section with the real commands and set the flag to `1`. For a Node.js project, a complete small version could be:
+## 5. Connect product checks
+
+Edit `scripts/harness/project-checks.sh`, replace the disabled section with real commands, and set `PROJECT_CHECKS_CONFIGURED=1`.
+
+Node.js example:
 
 ```bash
 #!/usr/bin/env bash
@@ -69,7 +72,7 @@ npm test
 npm run build
 ```
 
-For a Python project, it could be:
+Python example:
 
 ```bash
 #!/usr/bin/env bash
@@ -82,63 +85,22 @@ python -m ruff check .
 python -m pytest
 ```
 
-Use the repository's canonical commands rather than copying tools it does not use. Keep `set -euo pipefail`: the first failing command then preserves its non-zero result, so `make verify` and CI fail visibly.
+Use the repository's canonical tools and preserve non-zero exit statuses. See the [Harness reference](./harness.md).
 
-The [Harness reference](./harness.md) explains each verification state, CI behavior, and diagnostic override.
+Now change the Project Contract to `Status: complete` and set Complete verification to `make verify`. A controller may enter Delivery only in this state.
 
-## 5. Review Skills and finish setup
+## 6. Review repository Skills
 
-Read the [Skills guide](./skills.md). Keep, adapt, or remove bundled Skills deliberately. Then run `make verify` again and confirm the summary now says `Project checks: passed` and `Overall: verification passed`.
+Read the [Skills guide](./skills.md). Keep `harness-feedback` when the project should learn from concrete development evidence. Remove it when that workflow is not part of the project. Create another repository Skill only for repeatable project-specific judgment.
 
-Use this checklist before committing the customized base:
+Run `make verify` again. A fully configured project should end with `Project checks: passed` and `Overall: verification passed`.
+
+## Completion checklist
 
 - [ ] Product README replaces the template landing page.
-- [ ] `AGENTS.md` describes real project rules and canonical commands.
-- [ ] `PROJECT_CHECKS_CONFIGURED=1` and project checks run real commands.
-- [ ] Bundled Skills have been reviewed for this project's workflow.
+- [ ] `AGENTS.md` describes actual project rules.
+- [ ] `.agents/project-contract.md` points to real commands, locations, and policies.
+- [ ] `PROJECT_CHECKS_CONFIGURED=1` and product checks run real commands.
+- [ ] Repository Skills have been reviewed.
 - [ ] `make verify` reports complete verification locally.
 - [ ] CI runs the same `make verify` entrypoint.
-
-## Recommended development flow
-
-Choose the lightest workflow that fits the uncertainty and risk of the change.
-
-```text
-Is the request clear and low-risk?
-├── Yes → Ask Codex to implement it and verify the result.
-└── No, or the change is important
-    └── Invoke $grill-with-docs
-        ├── Codex inspects facts available in the repository
-        ├── Codex asks one decision question with a recommendation
-        ├── You confirm or correct the decision
-        ├── Durable terminology and qualifying ADRs are recorded
-        └── Continue until the important branches are settled
-```
-
-Use `$grill-with-docs` for a new product direction, a substantial feature, unclear domain language, or a consequential architecture choice. Skip it for a small bug or another routine change whose outcome is already precise.
-
-After grilling, stay in the same conversation so unwritten decisions remain available. Ask Codex:
-
-```text
-Based on the decisions we just settled, write a reviewable implementation plan. Do not implement it yet.
-```
-
-Review that plan before requesting implementation. Version `0.1.0` does not yet bundle `to-spec`, `to-tickets`, or the rest of a full development Skill chain.
-
-## FAQ
-
-### Why does `make verify` warn but exit successfully at first?
-
-The warning marks an intentional bootstrap state. The base can validate its own Harness and Skills before it knows the derived project's language or commands.
-
-### Why is CI green when no product tests ran?
-
-CI is preconfigured to run `make verify`, but the initial project checks are empty. A green run only proves the base is healthy until you configure `project-checks.sh`; afterward it also represents the product checks you added.
-
-### Should I use `$grill-with-docs` for the first feature?
-
-Use it when important behavior, terminology, or trade-offs are unsettled. Example:
-
-```text
-$grill-with-docs I want to add team invitations. Inspect the repository, then help me settle the user flow, terminology, authorization boundaries, and important failure cases before implementation.
-```

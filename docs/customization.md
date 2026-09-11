@@ -6,6 +6,17 @@ This is the reference manual for adapting each part of the base. For the setup s
 
 Customize the base so its guidance and checks describe the derived project rather than `vibe-engineering-base`. Keep instructions that Codex reads on every task small, and move details to the narrowest appropriate location.
 
+## Project Contract
+
+`.agents/project-contract.md` is the stable entrypoint for repository-aware workflows. Keep its five sections in order: Verification, Knowledge, Work artifacts, Workspace, and Delivery.
+
+- Point to authoritative commands and files instead of copying their contents.
+- Keep Verification at `Status: bootstrap` with `Complete verification: unconfigured` until real project checks exist. After configuring them, set `Status: complete` and name the complete command.
+- Configure the ticket backend and delivery mode when the project chooses them.
+- Keep fields unconfigured when no policy exists; do not invent one from incidental history.
+- Treat `AGENTS.md` and executable tooling as authoritative when they conflict with the contract, then update the contract after resolving the conflict.
+- Run `make verify` after changing the contract.
+
 ## `AGENTS.md`
 
 Keep rules that should affect nearly every repository task:
@@ -20,6 +31,8 @@ Replace the `Project-specific guidance` placeholder. Do not copy detailed archit
 ## Deterministic project checks
 
 Edit `scripts/harness/project-checks.sh` so `make verify` runs the derived project's real checks. Prefer one canonical command per concern and preserve non-zero exit statuses. Keep formatting, lint, type, test, and build rules in tools when a machine can enforce them.
+
+After setting `PROJECT_CHECKS_CONFIGURED=1`, update the Project Contract to `Status: complete` and set the Complete verification value to `make verify`. The validator rejects a complete contract that still points to an explicitly unconfigured default project-checks script.
 
 ## Repository Skills
 
@@ -44,6 +57,7 @@ Route knowledge by purpose:
 | Knowledge | Location |
 | --- | --- |
 | Rules for nearly every task | `AGENTS.md` |
+| Workflow-facing commands, locations, and policies | `.agents/project-contract.md` |
 | Repeatable task-specific workflows | `.agents/skills/` |
 | Machine-checkable behavior | Tests, linters, and verification scripts |
 | Canonical domain vocabulary | `CONTEXT.md` when the project uses it |
@@ -59,6 +73,6 @@ Native Windows and WSL are not officially supported by base version `0.1.0`.
 
 ## Base updates
 
-Version `0.1.0` has no installer, automatic merge, or upgrade mechanism for existing repositories. After customization, the derived repository owns its copies of `AGENTS.md`, Skills, scripts, tests, and workflows. Review later base changes manually instead of overwriting project-specific files.
+Version `0.1.0` has no installer, automatic merge, or upgrade mechanism for existing repositories. After customization, the derived repository owns its copies of `AGENTS.md`, the Project Contract, Skills, scripts, tests, and workflows. Review later base changes manually instead of overwriting project-specific files.
 
 Requirements for a future conflict-safe installer are tracked in [`TODO.md`](../TODO.md).
