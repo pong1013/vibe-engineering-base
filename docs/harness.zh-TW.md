@@ -20,7 +20,7 @@ make verify
 
 Skill checks 使用輕量的 shell 驗證。它會檢查目錄與 Skill 名稱、必要的 frontmatter 欄位、未完成的 placeholder、`agents/openai.yaml` 必要介面欄位、default prompt，以及選用 invocation policy 的格式。它不會完整解析或驗證任意 YAML。
 
-Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。它也會驗證具型別的驗證狀態、安全的 repository-relative paths、固定為 `yes` 的保留與 Delivery Gate 不變條件，以及合法的 delivery mode。欄位放錯位置、未知欄位、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
+Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。它也會驗證具型別的驗證狀態、安全的 repository-relative paths、固定為 `yes` 的保留與 Delivery Gate 不變條件，以及合法的 delivery mode。Work artifacts 的位置可設為 repository path、`unconfigured`，或以 `configured by` 指向已存在的 repository-relative 設定檔；最後一種形式可引用權威 tracker 設定而不複製內容。欄位放錯位置、未知欄位、缺失或不安全的引用、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
 
 ## 驗證狀態
 

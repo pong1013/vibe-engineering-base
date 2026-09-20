@@ -54,6 +54,15 @@ make verify
 
 未知值在決策完成前保持 unconfigured。Contract 是精簡索引，不是第二份架構文件。
 
+若要使用另外安裝的 `$ai-workflow`，先設定新 repository 的 Git remote，再於該 repository 執行 `$setup-matt-pocock-skills`。檢查預覽並確認寫入，讓 `docs/agents/issue-tracker.md`、`docs/agents/domain.md` 與 Agent skills 區塊都指向**你的** repository。範本中的 tracker 身分屬於 `pong1013/vibe-engineering-base`；衍生專案不得沿用它發佈 issues。完成 setup 後，讓兩個 Work artifacts 欄位指向產生的 tracker 檔案：
+
+```text
+- Specifications: configured by `docs/agents/issue-tracker.md`
+- Ticket backend: configured by `docs/agents/issue-tracker.md`
+```
+
+完成下一步的產品 checks 前，Contract 應維持 `Status: bootstrap`。驗證仍為 bootstrap 時，`$ai-workflow` 無法發佈 tickets 或實作 feature。
+
 ## 5. 接上產品 checks
 
 編輯 `scripts/harness/project-checks.sh`，用真正的命令取代停用區塊，並設定 `PROJECT_CHECKS_CONFIGURED=1`。

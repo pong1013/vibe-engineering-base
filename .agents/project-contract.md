@@ -17,8 +17,8 @@ This file is the workflow-facing index for this repository. Follow `AGENTS.md` a
 
 ## Work artifacts
 
-- Specifications: `docs/specs/`
-- Ticket backend: unconfigured
+- Specifications: configured by `docs/agents/issue-tracker.md`
+- Ticket backend: configured by `docs/agents/issue-tracker.md`
 
 ## Workspace
 

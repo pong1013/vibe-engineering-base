@@ -54,6 +54,15 @@ Edit `.agents/project-contract.md`:
 
 Keep unknown values unconfigured until they are settled. The contract is a thin index, not a second architecture document.
 
+If you use the separately installed `$ai-workflow`, first set the new repository's Git remote and run `$setup-matt-pocock-skills` in that repository. Review its preview and confirm the setup so `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and the Agent skills block name **your** repository. The template's tracker identity belongs to `pong1013/vibe-engineering-base`; do not use it to publish issues for a derived project. After setup, point both Work artifacts fields at the generated tracker file:
+
+```text
+- Specifications: configured by `docs/agents/issue-tracker.md`
+- Ticket backend: configured by `docs/agents/issue-tracker.md`
+```
+
+Keep the Contract at `Status: bootstrap` until the product checks in the next step are configured. `$ai-workflow` cannot publish tickets or implement a feature while verification remains bootstrap.
+
 ## 5. Connect product checks
 
 Edit `scripts/harness/project-checks.sh`, replace the disabled section with real commands, and set `PROJECT_CHECKS_CONFIGURED=1`.

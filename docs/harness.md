@@ -20,7 +20,7 @@ make verify
 
 Skill checks use lightweight shell validation. They verify directory and Skill names, required frontmatter fields, unfinished placeholders, required `agents/openai.yaml` interface fields, default prompts, and the shape of optional invocation policies. They do not fully parse or validate arbitrary YAML.
 
-Project Contract checks require `.agents/project-contract.md`, its five standard sections in order, and each known field inside its owning section. They validate typed verification status, safe repository-relative paths, the `yes` preservation and Delivery Gate invariants, and an allowed delivery mode. They reject misplaced or unknown fields, nonsensical commands, and a contract that claims complete verification while the default project checks declare themselves unconfigured.
+Project Contract checks require `.agents/project-contract.md`, its five standard sections in order, and each known field inside its owning section. They validate typed verification status, safe repository-relative paths, the `yes` preservation and Delivery Gate invariants, and an allowed delivery mode. Work-artifact locations may be a repository path, `unconfigured`, or `configured by` an existing repository-relative configuration file; the last form lets the Contract point to an authoritative tracker setup without copying it. Checks reject misplaced or unknown fields, missing or unsafe references, nonsensical commands, and a contract that claims complete verification while the default project checks declare themselves unconfigured.
 
 ## Verification states
 

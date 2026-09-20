@@ -72,6 +72,39 @@ validate_relative_path() {
     die "${label} must remain inside the repository"
 }
 
+validate_repo_path_value() {
+  local label="$1"
+  local value="$2"
+  [[ "${value}" =~ ^\`[^\`]+\`$ ]] || die "${label} must contain one backtick-wrapped relative path"
+  value="${value#\`}"
+  value="${value%\`}"
+  [[ "${value}" =~ ^[A-Za-z0-9._/-]+$ ]] || die "${label} contains unsupported path characters"
+  [[ "${value}" != /* && "${value}" != ".." && "${value}" != ../* && "${value}" != */../* && "${value}" != */.. ]] || \
+    die "${label} must remain inside the repository"
+}
+
+validate_configuration_reference() {
+  local label="$1"
+  local value="$2"
+  local path
+  validate_repo_path_value "${label}" "${value}"
+  path="${value#\`}"
+  path="${path%\`}"
+  [[ -f "${CONTRACT_ROOT}/${path}" ]] || die "${label} file not found: ${path}"
+}
+
+validate_artifact_location() {
+  local label="$1"
+  local value="$2"
+  [[ "${value}" == "unconfigured" ]] && return
+  if [[ "${value}" == "configured by \`"*"\`" ]]; then
+    value="${value#configured by }"
+    validate_configuration_reference "${label} configuration reference" "${value}"
+    return
+  fi
+  validate_repo_path_value "${label}" "${value}"
+}
+
 validate_command() {
   local label="$1"
   local value="$2"
@@ -133,12 +166,17 @@ esac
 validate_relative_path "Knowledge" "Repository instructions"
 validate_relative_path "Knowledge" "Domain language"
 validate_relative_path "Knowledge" "Architecture decisions"
-validate_relative_path "Work artifacts" "Specifications"
+specifications="$(field_value "Work artifacts" "Specifications")"
+validate_artifact_location "Specifications" "${specifications}"
 validate_relative_path "Verification" "Project checks"
 
 ticket_backend="$(field_value "Work artifacts" "Ticket backend")"
-[[ "${ticket_backend}" == "unconfigured" || "${ticket_backend}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || \
-  die "Ticket backend must be 'unconfigured' or a lowercase backend identifier"
+if [[ "${ticket_backend}" == "configured by \`"*"\`" ]]; then
+  validate_configuration_reference "Ticket backend configuration reference" "${ticket_backend#configured by }"
+else
+  [[ "${ticket_backend}" == "unconfigured" || "${ticket_backend}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || \
+    die "Ticket backend must be 'unconfigured', a lowercase backend identifier, or 'configured by' one repository-relative path"
+fi
 
 [[ "$(field_value "Workspace" "Preserve unrelated working-tree changes")" == "yes" ]] || \
   die "Preserve unrelated working-tree changes must be 'yes'"

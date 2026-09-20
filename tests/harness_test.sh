@@ -219,6 +219,56 @@ test_unsafe_contract_path_fails() {
   assert_invalid_project_contract "must remain inside the repository"
 }
 
+test_tracker_configuration_reference_passes() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  mkdir -p "${test_tmp}/docs/agents"
+  : > "${test_tmp}/docs/agents/issue-tracker.md"
+  sed -i.bak \
+    -e 's#Specifications: `docs/specs/`#Specifications: configured by `docs/agents/issue-tracker.md`#' \
+    -e 's#Ticket backend: unconfigured#Ticket backend: configured by `docs/agents/issue-tracker.md`#' \
+    "${test_tmp}/project-contract.md"
+  HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null
+}
+
+test_missing_tracker_configuration_reference_fails() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  sed -i.bak \
+    's#Specifications: `docs/specs/`#Specifications: configured by `docs/agents/issue-tracker.md`#' \
+    "${test_tmp}/project-contract.md"
+  assert_invalid_project_contract "Specifications configuration reference file not found"
+}
+
+test_missing_ticket_backend_configuration_reference_fails() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  sed -i.bak \
+    's#Ticket backend: unconfigured#Ticket backend: configured by `docs/agents/issue-tracker.md`#' \
+    "${test_tmp}/project-contract.md"
+  assert_invalid_project_contract "Ticket backend configuration reference file not found"
+}
+
+test_unsafe_tracker_configuration_reference_fails() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  sed -i.bak \
+    's#Specifications: `docs/specs/`#Specifications: configured by `../issue-tracker.md`#' \
+    "${test_tmp}/project-contract.md"
+  assert_invalid_project_contract "Specifications configuration reference must remain inside the repository"
+}
+
+test_malformed_tracker_configuration_reference_fails() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  sed -i.bak \
+    's#Ticket backend: unconfigured#Ticket backend: configured by docs/agents/issue-tracker.md#' \
+    "${test_tmp}/project-contract.md"
+  assert_invalid_project_contract "Ticket backend must be"
+}
+
 test_verification_configuration_conflict_fails() {
   new_temp_dir
   write_valid_project_contract "${test_tmp}/project-contract.md"
@@ -459,6 +509,11 @@ run_test "invalid delivery mode fails" test_invalid_delivery_mode_fails
 run_test "unsafe workspace policy fails" test_unsafe_workspace_policy_fails
 run_test "nonsensical verification command fails" test_nonsensical_verification_command_fails
 run_test "unsafe contract path fails" test_unsafe_contract_path_fails
+run_test "tracker configuration references pass" test_tracker_configuration_reference_passes
+run_test "missing tracker configuration reference fails" test_missing_tracker_configuration_reference_fails
+run_test "missing ticket backend configuration reference fails" test_missing_ticket_backend_configuration_reference_fails
+run_test "unsafe tracker configuration reference fails" test_unsafe_tracker_configuration_reference_fails
+run_test "malformed tracker configuration reference fails" test_malformed_tracker_configuration_reference_fails
 run_test "verification configuration conflict fails" test_verification_configuration_conflict_fails
 run_test "bootstrap Project Contract passes" test_bootstrap_contract_passes
 run_test "misplaced Project Contract field fails" test_misplaced_contract_field_fails
