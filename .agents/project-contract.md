@@ -4,9 +4,9 @@ This file is the workflow-facing index for this repository. Follow `AGENTS.md` a
 
 ## Verification
 
-- Status: bootstrap
+- Status: complete
 - Bootstrap verification: `make verify`
-- Complete verification: unconfigured
+- Complete verification: `make verify`
 - Project checks: `scripts/harness/project-checks.sh`
 
 ## Knowledge
@@ -22,12 +22,12 @@ This file is the workflow-facing index for this repository. Follow `AGENTS.md` a
 
 ## Workspace
 
-- Default branch: discover from the repository
+- Default branch: `main`
 - Feature branch naming: follow an explicit repository policy; otherwise propose a safe name
 - Preserve unrelated working-tree changes: yes
 
 ## Delivery
 
-- Mode: unconfigured
-- Remote and target branch: discover and confirm before delivery
+- Mode: pull-request
+- Remote and target branch: `origin/main`
 - Require Delivery Gate: yes

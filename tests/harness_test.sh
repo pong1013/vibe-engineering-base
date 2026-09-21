@@ -102,31 +102,32 @@ write_valid_project_contract() {
     > "${contract_file}"
 }
 
-test_default_project_checks_warn_and_pass() {
+test_source_project_checks_pass() {
   local output
   if ! output="$(bash "${ROOT_DIR}/scripts/harness/project-checks.sh" 2>&1)"; then
-    fail "default project checks should pass"
+    fail "source project checks should pass"
     return
   fi
-  [[ "${output}" == *"WARNING: project checks are not configured"* ]] || fail "missing configuration warning"
+  [[ "${output}" == *"Validated 2 active repository skill(s)."* ]] || \
+    fail "source checks did not validate repository Skills"
+  [[ "${output}" == *"Validated Project Contract (complete)"* ]] || \
+    fail "source checks did not validate the complete Project Contract"
 }
 
-test_verify_reports_bootstrap_state() {
+test_verify_reports_complete_source_state() {
   local output
 
   if ! output="$(HARNESS_SKIP_TESTS=1 bash "${ROOT_DIR}/scripts/harness/verify.sh" 2>&1)"; then
-    fail "default verification should pass in bootstrap state"
+    fail "source verification should pass in complete state"
     return
   fi
   [[ "${output}" == *"Harness checks: passed"* ]] || fail "missing Harness summary"
   [[ "${output}" == *"Repository Skills: passed"* ]] || fail "missing Skill summary"
   [[ "${output}" == *"Project Contract: passed"* ]] || fail "missing Project Contract summary"
-  [[ "${output}" == *"Project checks: not configured"* ]] || fail "missing project checks state"
-  [[ "${output}" == *"Overall: bootstrap ready; project verification is incomplete"* ]] || \
-    fail "missing incomplete verification summary"
-  [[ "${output}" == *"HARNESS_VERIFICATION_STATUS=bootstrap"* ]] || \
-    fail "missing machine-readable bootstrap status"
-  [[ "${output}" != *"Overall: verification passed"* ]] || fail "bootstrap state claimed complete verification"
+  [[ "${output}" == *"Project checks: passed"* ]] || fail "missing project checks state"
+  [[ "${output}" == *"Overall: verification passed"* ]] || fail "missing complete verification summary"
+  [[ "${output}" == *"HARNESS_VERIFICATION_STATUS=complete"* ]] || \
+    fail "missing machine-readable complete status"
 }
 
 test_valid_project_contract_passes() {
@@ -492,8 +493,8 @@ test_readmes_match_version() {
     fail "README.zh-TW.md does not mention VERSION ${version}"
 }
 
-run_test "default project checks warn and pass" test_default_project_checks_warn_and_pass
-run_test "verify reports bootstrap state" test_verify_reports_bootstrap_state
+run_test "source project checks pass" test_source_project_checks_pass
+run_test "verify reports complete source state" test_verify_reports_complete_source_state
 run_test "valid Skill passes" test_valid_skill_passes
 run_test "Skill name mismatch fails" test_skill_name_mismatch_fails
 run_test "unfinished Skill placeholder fails" test_skill_placeholder_fails

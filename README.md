@@ -16,16 +16,16 @@ A language-agnostic project template for reliable AI-assisted and vibe coding wi
 
 4. Ask Codex: `Read AGENTS.md and help me configure the project rules and project checks for this repository.`
 
-The first run should succeed with this explicit bootstrap summary:
+In this source repository, the run succeeds with a complete summary because the base's own repository checks are configured:
 
 ```text
 Harness checks: passed
 Repository Skills: passed
-Project checks: not configured
-Overall: bootstrap ready; project verification is incomplete
+Project checks: passed
+Overall: verification passed
 ```
 
-This means the template itself works. It does **not** mean your product tests, lint, or build have run. Connect those commands by following [Getting Started](./docs/getting-started.md).
+That complete result applies to the source repository only. A project created from the template should use a bootstrap Contract and `PROJECT_CHECKS_CONFIGURED=0` until its own tests, lint, build, and other product checks are connected. During that bootstrap period, `make verify` succeeds but reports `Overall: bootstrap ready; project verification is incomplete`. Follow [Getting Started](./docs/getting-started.md) to configure the derived project.
 
 ## How the Harness fits together
 

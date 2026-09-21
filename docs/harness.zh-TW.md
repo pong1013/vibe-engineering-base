@@ -24,7 +24,19 @@ Project Contract checks 會要求 `.agents/project-contract.md`、依序排列�
 
 ## 驗證狀態
 
-尚未客製化的專案範本會成功結束，並顯示：
+Source repository 已設定用來驗證自身 Skills 與 Contract 的 checks，因此摘要結尾如下：
+
+```text
+Harness checks: passed
+Repository Skills: passed
+Project Contract: passed
+Contract verification status: complete
+Project checks: passed
+Overall: verification passed
+HARNESS_VERIFICATION_STATUS=complete
+```
+
+衍生專案在產品 checks 設定完成前應維持 bootstrap。成功的 bootstrap 摘要結尾如下：
 
 ```text
 Harness checks: passed
@@ -36,7 +48,7 @@ Overall: bootstrap ready; project verification is incomplete
 HARNESS_VERIFICATION_STATUS=bootstrap
 ```
 
-這代表可重用的基礎功能正常，不代表產品測試、lint 或 build 已執行。
+這個 bootstrap 結果代表可重用的基礎功能正常，不代表衍生專案的產品測試、lint 或 build 已執行。
 
 設定 `PROJECT_CHECKS_CONFIGURED=1`、Contract status 為 complete 且所有命令都成功後，摘要結尾會變成：
 
@@ -61,7 +73,7 @@ make harness-audit  # 以唯讀 Codex audit 尋找可長期保留的 Harness 改
 
 ## 設定 project checks
 
-專案範本無法預先知道衍生專案的語言或 toolchain。因此 `scripts/harness/project-checks.sh` 一開始使用 `PROJECT_CHECKS_CONFIGURED=0`，而且不包含產品命令。加入專案標準的 test、lint、build 或其他驗證命令後，才能改成 `1`。
+Source repository 使用 `PROJECT_CHECKS_CONFIGURED=1` 驗證自己的 repository Skills 與 Project Contract。因為 base 無法預先知道衍生專案的語言或 toolchain，專案 onboarding 必須先把這個值重設為 `0`，並以衍生專案標準的 test、lint、build 或其他驗證命令取代 source checks。這些命令設定完成後，才能改回 `1`。
 
 保留 `set -euo pipefail`，也不要攔截失敗。這樣原始的非零 status 才能傳到 `make verify` 與 CI。可直接使用的 Node.js 與 Python 範例放在[入門教學](./getting-started.zh-TW.md#5-接上產品-checks)。
 
@@ -69,7 +81,7 @@ make harness-audit  # 以唯讀 Codex audit 尋找可長期保留的 Harness 改
 
 `.github/workflows/verify.yml` 會在 push 與 pull request 時，分別於 Ubuntu 和 macOS 執行 `make verify`。本機與 CI 因此使用相同入口。Workflow 只使用 repository read permission，也不執行非決定性的 Harness audit。
 
-Project checks 尚未設定時，CI 仍可能是綠燈。這時只代表範本的 Harness 與 Skills 通過。請查看 job output，並在把它視為產品驗證前完成專案設定。
+衍生專案的 project checks 尚未設定時，CI 仍可能是綠燈。這個 bootstrap 狀態只代表範本的 Harness 與 Skills 通過。請查看 job output，並在把它視為產品驗證前完成專案設定。Source repository 本身已完成設定，會輸出上方的 complete status。
 
 ## Harness audit
 

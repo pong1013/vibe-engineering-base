@@ -16,16 +16,16 @@
 
 4. 告訴 Codex：`請讀取 AGENTS.md，協助我設定這個專案的規則與 project checks。`
 
-第一次執行應成功，並顯示明確的初始狀態：
+在這個 source repository 中，base 自己的 repository checks 已設定，因此執行結果會顯示 complete 摘要：
 
 ```text
 Harness checks: passed
 Repository Skills: passed
-Project checks: not configured
-Overall: bootstrap ready; project verification is incomplete
+Project checks: passed
+Overall: verification passed
 ```
 
-這代表專案範本本身可正常運作，不代表產品的測試、lint 或 build 已執行。請按照[入門教學](./docs/getting-started.zh-TW.md)接上這些命令。
+這個 complete 結果只適用於 source repository。從範本建立的專案在接上自己的測試、lint、build 與其他產品 checks 前，應使用 bootstrap Contract 與 `PROJECT_CHECKS_CONFIGURED=0`。在 bootstrap 階段，`make verify` 會成功，但會顯示 `Overall: bootstrap ready; project verification is incomplete`。請按照[入門教學](./docs/getting-started.zh-TW.md)設定衍生專案。
 
 ## Harness 如何運作
 
