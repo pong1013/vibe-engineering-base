@@ -1,6 +1,6 @@
 ---
 name: vibe-engineering
-description: Configure or inspect a durable AI engineering Harness in a writable project folder. Use when a user wants to add project instructions, a Project Contract, or evidence-based Harness maintenance to an existing Git or plain folder.
+description: Configure, inspect, or safely upgrade a durable AI engineering Harness in a writable project folder. Use when a user wants to add or update project instructions, a Project Contract, or evidence-based Harness maintenance in an existing Git or plain folder.
 ---
 
 # Vibe Engineering
@@ -35,4 +35,28 @@ python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_man
 
 Report each managed path as `current`, `modified`, or `missing`. Report `upgrade-available` when the installed manifest records a different source version. Do not describe status as installed when the manifest is absent.
 
-Setup and status are implemented now. Do not simulate upgrade or learning by overwriting modified files; those intents require their dedicated workflow support.
+## Upgrade
+
+Preview an upgrade without writing:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" upgrade --target /absolute/project/path
+```
+
+Show every `addition`, `replacement`, `unchanged`, and `conflict` operation. A modified managed file remains a conflict and includes a reviewable diff. Do not apply while conflicts are unresolved.
+
+When the user explicitly decides to replace one conflicted file with the packaged version, bind that exact decision into a new preview:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" upgrade --target /absolute/project/path --resolve-conflict .agents/project-contract.md
+```
+
+Apply the approved preview with the same resolution arguments and its `plan_token`:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" upgrade --target /absolute/project/path --resolve-conflict .agents/project-contract.md --apply --plan-token TOKEN
+```
+
+Each `--resolve-conflict` decision means replace that path with the packaged content. Repeat the option for multiple reviewed conflicts. The command rejects stale tokens, extra or duplicate decisions, unsafe paths, and wrong-type conflicts. Upgrade commits its manifest last and rolls back all managed writes if a write fails.
+
+Setup, status, and upgrade are implemented now. Do not simulate learning; that intent requires its dedicated workflow support.

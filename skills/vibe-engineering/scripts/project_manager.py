@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -81,7 +82,7 @@ def path_state(path: Path) -> dict[str, str]:
     return {"kind": "unsupported"}
 
 
-def ensure_safe_write_path(target: Path, relative: Path) -> None:
+def ensure_safe_write_path(target: Path, relative: Path, *, allow_wrong_type: bool = False) -> None:
     current = target
     for part in relative.parts:
         current = current / part
@@ -91,7 +92,7 @@ def ensure_safe_write_path(target: Path, relative: Path) -> None:
         if current != target / relative and state["kind"] not in ("missing", "directory"):
             raise UserError(f"managed write path has a non-directory parent: {relative}")
     final_state = path_state(target / relative)
-    if final_state["kind"] not in ("missing", "file"):
+    if not allow_wrong_type and final_state["kind"] not in ("missing", "file"):
         raise UserError(f"managed write target must be a regular file: {relative}")
 
 
@@ -272,6 +273,257 @@ def read_manifest(target: Path) -> dict[str, Any] | None:
     return value
 
 
+def validated_manifest_entries(manifest: dict[str, Any]) -> dict[Path, dict[str, str]]:
+    entries: dict[Path, dict[str, str]] = {}
+    for raw in manifest["managed"]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
+            raise UserError("manifest contains an invalid managed path")
+        relative = Path(raw["path"])
+        if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
+            raise UserError("manifest contains an unsafe managed path")
+        if relative in entries:
+            raise UserError("manifest contains duplicate managed paths")
+        if raw.get("scope") not in ("file", "managed-block"):
+            raise UserError(f"manifest contains an invalid scope for {relative.as_posix()}")
+        checksum = raw.get("sha256")
+        if (
+            not isinstance(checksum, str)
+            or len(checksum) != 64
+            or any(character not in "0123456789abcdef" for character in checksum)
+        ):
+            raise UserError(f"manifest contains an invalid checksum for {relative.as_posix()}")
+        entries[relative] = raw
+    return entries
+
+
+def checksum_for_scope(path: Path, scope: str) -> str:
+    if scope == "managed-block":
+        return managed_block_checksum(path.read_bytes())
+    return digest(path.read_bytes())
+
+
+def review_diff(relative: Path, current: bytes, desired: bytes) -> str:
+    try:
+        before = current.decode("utf-8").splitlines(keepends=True)
+        after = desired.decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        return (
+            f"binary {relative.as_posix()}: current sha256={digest(current)} "
+            f"desired sha256={digest(desired)}"
+        )
+    return "".join(
+        difflib.unified_diff(
+            before,
+            after,
+            fromfile=f"current/{relative.as_posix()}",
+            tofile=f"packaged/{relative.as_posix()}",
+        )
+    )
+
+
+def build_upgrade_plan(
+    target: Path, resolutions: tuple[str, ...]
+) -> tuple[dict[str, Any], dict[Path, bytes], dict[str, Any]]:
+    manifest = read_manifest(target)
+    if manifest is None:
+        raise UserError("Vibe Engineering is not installed; run setup first")
+    if manifest.get("schema_version") != 1:
+        raise UserError("manifest has an unsupported schema version")
+    installed_version = manifest.get("source_version")
+    if not isinstance(installed_version, str) or not installed_version:
+        raise UserError("manifest has an invalid source version")
+    capabilities_value = manifest.get("capabilities")
+    if not isinstance(capabilities_value, list) or not all(
+        isinstance(value, str) for value in capabilities_value
+    ):
+        raise UserError("manifest has invalid capabilities")
+    capabilities = normalize_capabilities(capabilities_value)
+    project_type = detect_project_type(target)
+    if manifest.get("project_type") != project_type:
+        raise UserError("project type changed since setup; upgrade cannot continue")
+
+    old_entries = validated_manifest_entries(manifest)
+    desired, new_entries_list = desired_files(target, capabilities, project_type)
+    new_entries = {Path(entry["path"]): entry for entry in new_entries_list}
+    missing_from_source = set(old_entries) - set(new_entries)
+    if missing_from_source:
+        paths = ", ".join(path.as_posix() for path in sorted(missing_from_source, key=str))
+        raise UserError(f"source no longer defines managed paths: {paths}")
+
+    if len(resolutions) != len(set(resolutions)):
+        raise UserError("duplicate conflict resolution path")
+    requested = tuple(sorted(resolutions))
+    for raw in requested:
+        candidate = Path(raw)
+        if candidate.is_absolute() or ".." in candidate.parts or candidate == Path("."):
+            raise UserError(f"unsafe conflict resolution path: {raw}")
+
+    observed: dict[str, dict[str, str]] = {}
+    operations: list[dict[str, Any]] = []
+    conflicts: set[str] = set()
+    for relative, content in sorted(desired.items(), key=lambda item: str(item[0])):
+        ensure_safe_write_path(target, relative, allow_wrong_type=True)
+        state = path_state(target / relative)
+        observed[relative.as_posix()] = state
+        prior = old_entries.get(relative)
+        item: dict[str, Any] = {"path": relative.as_posix()}
+        if state["kind"] == "missing":
+            item["action"] = "addition"
+        elif state["kind"] != "file":
+            item.update(action="conflict", reason=f"wrong-type:{state['kind']}")
+            conflicts.add(relative.as_posix())
+        elif prior is None:
+            item.update(
+                action="conflict",
+                reason="untracked-existing-file",
+                diff=review_diff(relative, (target / relative).read_bytes(), content),
+            )
+            conflicts.add(relative.as_posix())
+        else:
+            actual = checksum_for_scope(target / relative, prior["scope"])
+            if actual != prior["sha256"]:
+                item.update(
+                    action="conflict",
+                    reason="locally-modified",
+                    diff=review_diff(relative, (target / relative).read_bytes(), content),
+                )
+                conflicts.add(relative.as_posix())
+            elif digest((target / relative).read_bytes()) == digest(content):
+                item["action"] = "unchanged"
+            else:
+                item["action"] = "replacement"
+        operations.append(item)
+
+    unknown_resolutions = set(requested) - conflicts
+    if unknown_resolutions:
+        paths = ", ".join(sorted(unknown_resolutions))
+        raise UserError(f"conflict resolution does not match a current conflict: {paths}")
+    for item in operations:
+        if item["path"] in requested:
+            if item.get("reason", "").startswith("wrong-type:"):
+                raise UserError(f"wrong-type conflict cannot be replaced safely: {item['path']}")
+            item["resolution"] = "replace"
+
+    upgraded_manifest = {
+        "schema_version": 1,
+        "source_version": SOURCE_VERSION,
+        "project_type": project_type,
+        "capabilities": list(capabilities),
+        "managed": new_entries_list,
+    }
+    ensure_safe_write_path(target, MANIFEST_PATH)
+    observed[MANIFEST_PATH.as_posix()] = path_state(target / MANIFEST_PATH)
+    token_input = {
+        "command": "upgrade",
+        "target": str(target),
+        "source_version": SOURCE_VERSION,
+        "installed_version": installed_version,
+        "capabilities": list(capabilities),
+        "resolutions": list(requested),
+        "observed": observed,
+        "desired": {
+            relative.as_posix(): digest(content)
+            for relative, content in sorted(desired.items(), key=lambda item: str(item[0]))
+        },
+        "manifest": digest(json_bytes(upgraded_manifest)),
+    }
+    plan_token = digest(json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    plan = {
+        "command": "upgrade",
+        "mode": "preview",
+        "target": str(target),
+        "installed_version": installed_version,
+        "source_version": SOURCE_VERSION,
+        "capabilities": list(capabilities),
+        "operations": operations,
+        "plan_token": plan_token,
+    }
+    return plan, desired, upgraded_manifest
+
+
+def transactional_write(target: Path, writes: dict[Path, bytes]) -> None:
+    originals: dict[Path, tuple[bytes, int] | None] = {}
+    created_directories: set[Path] = set()
+    for relative in writes:
+        ensure_safe_write_path(target, relative)
+        path = target / relative
+        state = path_state(path)
+        originals[relative] = (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)) if state["kind"] == "file" else None
+        parent = path.parent
+        while parent != target and not parent.exists():
+            created_directories.add(parent)
+            parent = parent.parent
+
+    raw_fail_after = os.environ.get("VIBE_ENGINEERING_TEST_FAIL_AFTER_WRITES")
+    fail_after: int | None = None
+    if raw_fail_after is not None:
+        try:
+            fail_after = int(raw_fail_after)
+        except ValueError:
+            raise UserError("invalid test write-failure value") from None
+        if fail_after < 0:
+            raise UserError("invalid test write-failure value")
+
+    written: list[Path] = []
+    try:
+        for relative, content in sorted(writes.items(), key=lambda item: relative_sort_key(item[0])):
+            atomic_write(target / relative, content)
+            written.append(relative)
+            if fail_after is not None and len(written) >= fail_after:
+                raise OSError("induced write failure")
+    except (OSError, UserError) as error:
+        rollback_errors = []
+        for relative in reversed(written):
+            path = target / relative
+            original = originals[relative]
+            try:
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    atomic_write(path, original[0])
+                    path.chmod(original[1])
+            except OSError as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        for directory in sorted(created_directories, key=lambda value: len(value.parts), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        if rollback_errors:
+            raise UserError("upgrade failed and rollback could not restore every managed path") from error
+        raise UserError(f"upgrade write failed; target restored: {error}") from None
+
+
+def upgrade(args: argparse.Namespace) -> dict[str, Any]:
+    target = validate_target(args.target)
+    resolutions = tuple(args.resolve_conflict or ())
+    plan, desired, upgraded_manifest = build_upgrade_plan(target, resolutions)
+    if not args.apply:
+        return plan
+    if not args.plan_token:
+        raise UserError("--plan-token is required with --apply")
+    if args.plan_token != plan["plan_token"]:
+        raise UserError("project state changed after preview; create a new upgrade preview")
+    unresolved = [
+        item["path"]
+        for item in plan["operations"]
+        if item["action"] == "conflict" and item.get("resolution") != "replace"
+    ]
+    if unresolved:
+        raise UserError(f"upgrade has unresolved conflicts: {', '.join(unresolved)}")
+    writes = {
+        Path(item["path"]): desired[Path(item["path"])]
+        for item in plan["operations"]
+        if item["action"] in ("addition", "replacement") or item.get("resolution") == "replace"
+    }
+    manifest_content = json_bytes(upgraded_manifest)
+    if (target / MANIFEST_PATH).read_bytes() != manifest_content:
+        writes[MANIFEST_PATH] = manifest_content
+    transactional_write(target, writes)
+    plan["mode"] = "applied"
+    return plan
+
+
 def status(args: argparse.Namespace) -> dict[str, Any]:
     target = validate_target(args.target)
     manifest = read_manifest(target)
@@ -331,6 +583,12 @@ def parser() -> argparse.ArgumentParser:
     status_parser = commands.add_parser("status", help="inspect installed managed files without writing")
     status_parser.add_argument("--target", required=True)
     status_parser.set_defaults(handler=status)
+    upgrade_parser = commands.add_parser("upgrade", help="preview or apply a manifest-based upgrade")
+    upgrade_parser.add_argument("--target", required=True)
+    upgrade_parser.add_argument("--resolve-conflict", action="append")
+    upgrade_parser.add_argument("--apply", action="store_true")
+    upgrade_parser.add_argument("--plan-token")
+    upgrade_parser.set_defaults(handler=upgrade)
     return root
 
 

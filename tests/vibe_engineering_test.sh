@@ -53,9 +53,68 @@ apply_preview() {
   python3 "${CLI}" setup --target "${target}" --apply --plan-token "${token}"
 }
 
+preview_upgrade() {
+  local cli="$1"
+  local target="$2"
+  shift 2
+  python3 "${cli}" upgrade --target "${target}" "$@"
+}
+
+apply_upgrade_preview() {
+  local cli="$1"
+  local target="$2"
+  local preview="$3"
+  shift 3
+  local token
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  python3 "${cli}" upgrade --target "${target}" "$@" --apply --plan-token "${token}"
+}
+
+new_upgrader() {
+  upgrader_dir="${TEST_TEMP_ROOT}/upgrader-${TESTS_RUN}"
+  cp -R "${ROOT_DIR}/skills/vibe-engineering" "${upgrader_dir}"
+  printf '%s\n' '0.2.0' > "${upgrader_dir}/VERSION"
+  printf '%s\n' '<!-- upgraded contract -->' >> "${upgrader_dir}/assets/contracts/folder.md"
+}
+
 snapshot_files() {
   local target="$1"
   find "${target}" -type f -not -path '*/.git/*' -print0 | sort -z | xargs -0 shasum -a 256
+}
+
+snapshot_tree() {
+  local target="$1"
+  python3 - "${target}" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+snapshot = []
+for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    relative = path.relative_to(root).as_posix()
+    metadata = path.lstat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if stat.S_ISLNK(metadata.st_mode):
+        snapshot.append({"path": relative, "type": "symlink", "mode": mode, "target": os.readlink(path)})
+    elif stat.S_ISDIR(metadata.st_mode):
+        snapshot.append({"path": relative, "type": "directory", "mode": mode})
+    elif stat.S_ISREG(metadata.st_mode):
+        content = path.read_bytes()
+        snapshot.append({
+            "path": relative,
+            "type": "file",
+            "mode": mode,
+            "size": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        })
+    else:
+        snapshot.append({"path": relative, "type": "other", "mode": mode})
+print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+PY
 }
 
 test_skill_package_is_valid() {
@@ -347,6 +406,182 @@ PY
   [[ "${before_status}" == "${after_status}" ]] || fail "status wrote to the project"
 }
 
+test_upgrade_updates_clean_files_and_preserves_project_owned_skills() {
+  new_project
+  local setup_preview upgrade_preview applied custom_before custom_after
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  mkdir -p "${test_project}/.agents/skills/project-owned"
+  printf '%s\n' 'project owned bytes' > "${test_project}/.agents/skills/project-owned/SKILL.md"
+  custom_before="$(shasum -a 256 "${test_project}/.agents/skills/project-owned/SKILL.md")" || return
+  new_upgrader
+
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "replacement" ]] || \
+    fail "clean changed managed file was not previewed as replacement"
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/skills/harness-feedback/SKILL.md")')" == "unchanged" ]] || \
+    fail "unchanged managed file was not reported"
+  applied="$(apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${upgrade_preview}")" || return
+  [[ "$(printf '%s' "${applied}" | json_value 'data["mode"]')" == "applied" ]] || \
+    fail "upgrade did not report applied mode"
+  grep -Fq '<!-- upgraded contract -->' "${test_project}/.agents/project-contract.md" || \
+    fail "upgrade did not replace the clean managed file"
+  [[ "$(json_value 'data["source_version"]' < "${test_project}/.agents/vibe-engineering/manifest.json")" == "0.2.0" ]] || \
+    fail "upgrade did not update the manifest source version"
+  custom_after="$(shasum -a 256 "${test_project}/.agents/skills/project-owned/SKILL.md")" || return
+  [[ "${custom_before}" == "${custom_after}" ]] || fail "upgrade changed a project-owned Skill"
+
+  local before_repeat repeat_preview after_repeat
+  before_repeat="$(snapshot_files "${test_project}")" || return
+  repeat_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${repeat_preview}" | json_value 'all(item["action"] == "unchanged" for item in data["operations"])')" == "True" ]] || \
+    fail "current-version upgrade was not idempotent"
+  apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${repeat_preview}" >/dev/null || return
+  after_repeat="$(snapshot_files "${test_project}")" || return
+  [[ "${before_repeat}" == "${after_repeat}" ]] || fail "current-version upgrade changed the project"
+}
+
+test_upgrade_conflict_requires_explicit_bounded_resolution() {
+  new_project
+  local setup_preview conflict_preview resolved_preview before_rejected after_rejected
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  printf '%s\n' 'local contract edit' >> "${test_project}/.agents/project-contract.md"
+  new_upgrader
+
+  before_rejected="$(snapshot_files "${test_project}")" || return
+  conflict_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${conflict_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "conflict" ]] || \
+    fail "modified file was not reported as a conflict"
+  [[ "$(printf '%s' "${conflict_preview}" | json_value '"local contract edit" in next(item["diff"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "True" ]] || \
+    fail "conflict preview did not include a reviewable diff"
+  if apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${conflict_preview}" >/dev/null 2>&1; then
+    fail "unresolved conflict was applied"
+    return
+  fi
+  after_rejected="$(snapshot_files "${test_project}")" || return
+  [[ "${before_rejected}" == "${after_rejected}" ]] || fail "rejected conflict changed the target"
+
+  resolved_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    --resolve-conflict .agents/project-contract.md)" || return
+  [[ "$(printf '%s' "${resolved_preview}" | json_value 'next(item["resolution"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "replace" ]] || \
+    fail "explicit conflict resolution was not bounded in the preview"
+  apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    "${resolved_preview}" --resolve-conflict .agents/project-contract.md >/dev/null || return
+  ! grep -Fq 'local contract edit' "${test_project}/.agents/project-contract.md" || \
+    fail "explicit replace resolution did not install packaged content"
+}
+
+test_upgrade_reports_missing_wrong_type_and_unsafe_paths() {
+  new_project
+  local setup_preview missing_preview wrong_type_preview
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  new_upgrader
+  rm "${test_project}/.agents/skills/harness-feedback/SKILL.md"
+  missing_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${missing_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/skills/harness-feedback/SKILL.md")')" == "addition" ]] || \
+    fail "missing managed file was not reported as an addition"
+
+  mkdir "${test_project}/.agents/skills/harness-feedback/SKILL.md"
+  wrong_type_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${wrong_type_preview}" | json_value 'next(item["reason"] for item in data["operations"] if item["path"] == ".agents/skills/harness-feedback/SKILL.md")')" == "wrong-type:directory" ]] || \
+    fail "wrong-type managed path was not accurately reported"
+
+  rm -rf "${test_project}/.agents/skills/harness-feedback/SKILL.md"
+  ln -s "${TEST_TEMP_ROOT}" "${test_project}/.agents/skills/harness-feedback/SKILL.md"
+  if preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" >/dev/null 2>&1; then
+    fail "upgrade accepted an unsafe symlink path"
+  fi
+}
+
+test_upgrade_write_failure_rolls_back_complete_target() {
+  new_project
+  local setup_preview upgrade_preview before after token
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  new_upgrader
+  printf '%s\n' '# upgraded feedback' >> "${upgrader_dir}/assets/harness-feedback/SKILL.md"
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  token="$(printf '%s' "${upgrade_preview}" | json_value 'data["plan_token"]')" || return
+  before="$(snapshot_tree "${test_project}")" || return
+  if VIBE_ENGINEERING_TEST_FAIL_AFTER_WRITES=1 python3 "${upgrader_dir}/scripts/project_manager.py" \
+    upgrade --target "${test_project}" --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "induced write failure unexpectedly succeeded"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "write failure did not roll back the complete target"
+}
+
+test_upgrade_token_and_resolutions_are_exactly_bound() {
+  new_project
+  local setup_preview conflict_preview resolved_preview token before after
+  printf '%s\n' '# User preface' > "${test_project}/AGENTS.md"
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  printf '%s\n' 'local contract edit' >> "${test_project}/.agents/project-contract.md"
+  new_upgrader
+  conflict_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  token="$(printf '%s' "${conflict_preview}" | json_value 'data["plan_token"]')" || return
+  before="$(snapshot_files "${test_project}")" || return
+  if python3 "${upgrader_dir}/scripts/project_manager.py" upgrade --target "${test_project}" \
+    --resolve-conflict .agents/project-contract.md --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "token without a resolution was accepted with an added resolution"
+    return
+  fi
+  after="$(snapshot_files "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "resolution/token mismatch changed the target"
+
+  if preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    --resolve-conflict AGENTS.md >/dev/null 2>&1; then
+    fail "resolution for a non-conflict was accepted"
+    return
+  fi
+  if preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    --resolve-conflict .agents/project-contract.md \
+    --resolve-conflict .agents/project-contract.md >/dev/null 2>&1; then
+    fail "duplicate conflict resolution was accepted"
+    return
+  fi
+  if preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    --resolve-conflict ../outside >/dev/null 2>&1; then
+    fail "unsafe conflict resolution was accepted"
+    return
+  fi
+
+  resolved_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    --resolve-conflict .agents/project-contract.md)" || return
+  printf '%s\n' 'changed after preview' >> "${test_project}/AGENTS.md"
+  if apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" \
+    "${resolved_preview}" --resolve-conflict .agents/project-contract.md >/dev/null 2>&1; then
+    fail "stale upgrade token was accepted"
+  fi
+}
+
+test_upgrade_preserves_agents_outside_block_and_conflicts_inside_block() {
+  new_project
+  local setup_preview clean_preview conflict_preview
+  printf '%s\n' '# User preface' > "${test_project}/AGENTS.md"
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  new_upgrader
+  printf '%s\n' 'User suffix.' >> "${test_project}/AGENTS.md"
+  clean_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${clean_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == "AGENTS.md")')" == "unchanged" ]] || \
+    fail "outside-block AGENTS edit created a conflict"
+
+  python3 - "${test_project}/AGENTS.md" <<'PY' || return
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace("Keep reusable project workflows", "Keep altered project workflows"))
+PY
+  conflict_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${conflict_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == "AGENTS.md")')" == "conflict" ]] || \
+    fail "inside-block AGENTS edit was not a conflict"
+}
+
 run_test "Skill package is valid" test_skill_package_is_valid
 run_test "setup preview is read-only" test_setup_preview_is_read_only
 run_test "copied Skill subtree is self-contained" test_copied_skill_subtree_is_self_contained
@@ -362,6 +597,12 @@ run_test "failed validation leaves no partial setup" test_apply_validation_failu
 run_test "malformed managed markers fail closed" test_malformed_managed_markers_fail_closed
 run_test "capability selection is recorded" test_capability_selection_is_recorded
 run_test "status reports states without writing" test_status_reports_states_without_writing
+run_test "upgrade updates clean files and preserves project-owned Skills" test_upgrade_updates_clean_files_and_preserves_project_owned_skills
+run_test "upgrade conflicts require explicit bounded resolution" test_upgrade_conflict_requires_explicit_bounded_resolution
+run_test "upgrade reports missing, wrong-type, and unsafe paths" test_upgrade_reports_missing_wrong_type_and_unsafe_paths
+run_test "upgrade write failure rolls back the complete target" test_upgrade_write_failure_rolls_back_complete_target
+run_test "upgrade tokens and resolutions are exactly bound" test_upgrade_token_and_resolutions_are_exactly_bound
+run_test "upgrade preserves AGENTS outside its managed block" test_upgrade_preserves_agents_outside_block_and_conflicts_inside_block
 
 echo "${TESTS_RUN} vibe-engineering tests, ${TESTS_FAILED} failures"
 [[ ${TESTS_FAILED} -eq 0 ]]
