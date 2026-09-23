@@ -2,21 +2,29 @@
 
 [English](./getting-started.md) | [繁體中文](./getting-started.zh-TW.md) | [Back to README](../README.md)
 
-This tutorial turns `vibe-engineering-base` into an independently understandable and verifiable project for Codex.
+Use the user-scoped `$vibe-engineering` Skill to add the system to an existing project. Use the GitHub Template to start a new Git repository. The [README](../README.md#choose-an-entrypoint) gives copyable instructions for both paths.
 
-## Prerequisites
+## Requirements
 
-- Git.
 - Codex Desktop, CLI, or IDE extension.
 - macOS with Bash 3.2+ or Linux with Bash.
+- Git only for the template path or an existing Git repository.
 
-The base does not impose an application language, package manager, or framework.
+The Harness does not require a particular application language, package manager, framework, ticket tracker, or domain documentation layout.
 
-## 1. Create the repository
+## Existing project
 
-Open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create a new repository. Clone or open it in Codex at the repository root.
+Install `skills/vibe-engineering` with `$skill-installer`, then invoke `$vibe-engineering` in the target folder. Setup always produces a preview before writing. It preserves content outside its managed `AGENTS.md` block and records managed files and checksums in `.agents/vibe-engineering/manifest.json`.
 
-If the template button is unavailable:
+Git repositories receive Git-aware guidance. Plain folders receive the same durable instructions, Contract, and project-learning Skill without Git, CI, branch, commit, or pull request assumptions. See the [Skills guide](./skills.md#user-scoped-vibe-engineering) for setup, status, upgrade, and learn behavior.
+
+## New project from the template
+
+### 1. Create your repository
+
+Open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create a repository under your account or organization. Clone it, then open its root in Codex.
+
+If the template button is unavailable, use a normal clone and detach it from the source:
 
 ```bash
 git clone https://github.com/pong1013/vibe-engineering-base.git my-project
@@ -24,92 +32,58 @@ cd my-project
 git remote remove origin
 ```
 
-Create the destination repository before adding its remote.
+Create the destination repository and add it as `origin` before delivery. Do not push a derived project to the source remote.
 
-## 2. Confirm the bootstrap
+### 2. Give Codex the setup prompt
 
-Run:
+Paste the complete prompt from [Start a new project from the template](../README.md#start-a-new-project-from-the-template). It directs Codex to inspect the repository first, ask only for consequential missing facts, and configure the following as one setup task:
+
+- project identity and product README;
+- durable `AGENTS.md` guidance;
+- specification, tracker, domain, and ADR entrypoints;
+- a bootstrap Project Contract with the project's real workspace and delivery policy;
+- real product tests, lint, typecheck, and build commands;
+- repository learning through `harness-feedback`.
+
+The copied source files contain references used to maintain `vibe-engineering-base`, including the source tracker identity. The setup must replace those references with the new project's information or mark them unconfigured. It must not publish work to `pong1013/vibe-engineering-base`.
+
+Global Workflow is a separate user-scoped capability. This template neither installs nor modifies it, and it is not required to configure the project.
+
+### 3. Keep the Contract honest
+
+During setup, use these verification values:
+
+```text
+- Status: bootstrap
+- Bootstrap verification: `make verify`
+- Complete verification: unconfigured
+```
+
+Keep `PROJECT_CHECKS_CONFIGURED=0` while `scripts/harness/project-checks.sh` has no meaningful product commands. Unknown tracker, domain, branch, and delivery values should remain unconfigured rather than being guessed.
+
+Once real checks are connected, set `PROJECT_CHECKS_CONFIGURED=1`, change the Contract to `Status: complete`, and set Complete verification to `make verify`. The Contract is a thin index; architecture explanations belong in project documentation.
+
+The [Harness reference](./harness.md#configure-project-checks) explains how to connect product checks without hiding command failures.
+
+### 4. Verify at the end
+
+After the repository describes the actual project and product checks are wired, run:
 
 ```bash
 make verify
 ```
 
-The initial result reports that the Harness, repository Skills, and Project Contract pass while product checks are not configured. This proves the template works; it does not claim that product tests, lint, or build ran.
+A fully configured project ends with `Project checks: passed`, `Overall: verification passed`, and `HARNESS_VERIFICATION_STATUS=complete`.
 
-It also emits `HARNESS_VERIFICATION_STATUS=bootstrap`. Workflow controllers must treat that value as incomplete even though the bootstrap self-check exits successfully.
-
-## 3. Add project identity and durable rules
-
-Replace the root README files with the product's introduction and setup instructions. Replace `AGENTS.md`'s `Project-specific guidance` with architecture boundaries, canonical commands, compatibility requirements, and invariants that apply to nearly every change.
-
-## 4. Configure the Project Contract
-
-Edit `.agents/project-contract.md`:
-
-- Keep `Status: bootstrap`, set Bootstrap verification to `make verify`, and keep `Complete verification: unconfigured` until product checks are connected.
-- Point Knowledge entries at the repository's actual instructions, domain language, and ADR locations.
-- Choose where specifications live and configure a ticket backend when one exists.
-- Record workspace or branch naming only when the project has a real policy.
-- Select `none`, `commit-only`, `push`, `pull-request`, or `merge-request` as the delivery mode.
-
-Keep unknown values unconfigured until they are settled. The contract is a thin index, not a second architecture document.
-
-If you use the separately installed `$ai-workflow`, first set the new repository's Git remote and run `$setup-matt-pocock-skills` in that repository. Review its preview and confirm the setup so `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and the Agent skills block name **your** repository. The template's tracker identity belongs to `pong1013/vibe-engineering-base`; do not use it to publish issues for a derived project. After setup, point both Work artifacts fields at the generated tracker file:
-
-```text
-- Specifications: configured by `docs/agents/issue-tracker.md`
-- Ticket backend: configured by `docs/agents/issue-tracker.md`
-```
-
-Keep the Contract at `Status: bootstrap` until the product checks in the next step are configured. `$ai-workflow` cannot publish tickets or implement a feature while verification remains bootstrap.
-
-## 5. Connect product checks
-
-Edit `scripts/harness/project-checks.sh`, replace the disabled section with real commands, and set `PROJECT_CHECKS_CONFIGURED=1`.
-
-Node.js example:
-
-```bash
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-PROJECT_CHECKS_CONFIGURED=1
-
-npm run lint
-npm test
-npm run build
-```
-
-Python example:
-
-```bash
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-PROJECT_CHECKS_CONFIGURED=1
-
-python -m ruff check .
-python -m pytest
-```
-
-Use the repository's canonical tools and preserve non-zero exit statuses. See the [Harness reference](./harness.md).
-
-Now change the Project Contract to `Status: complete` and set Complete verification to `make verify`. A controller may enter Delivery only in this state.
-
-## 6. Review repository Skills
-
-Read the [Skills guide](./skills.md). Keep `harness-feedback` when the project should learn from concrete development evidence. Remove it when that workflow is not part of the project. Create another repository Skill only for repeatable project-specific judgment.
-
-Run `make verify` again. A fully configured project should end with `Project checks: passed` and `Overall: verification passed`.
+If meaningful product checks do not exist yet, leave the Contract at bootstrap. Verification may confirm the Harness itself, but the final report must list the missing checks and must not claim complete product verification.
 
 ## Completion checklist
 
-- [ ] Product README replaces the template landing page.
-- [ ] `AGENTS.md` describes actual project rules.
+- [ ] The product README replaces the template landing page.
+- [ ] `AGENTS.md` describes actual architecture boundaries, invariants, and canonical commands.
+- [ ] Source repository and tracker identities have been removed or replaced.
 - [ ] `.agents/project-contract.md` points to real commands, locations, and policies.
-- [ ] `PROJECT_CHECKS_CONFIGURED=1` and product checks run real commands.
-- [ ] Repository Skills have been reviewed.
-- [ ] `make verify` reports complete verification locally.
-- [ ] CI runs the same `make verify` entrypoint.
+- [ ] `PROJECT_CHECKS_CONFIGURED=1` only when product checks run real commands.
+- [ ] Repository Skills have been reviewed and `harness-feedback` remains active unless deliberately removed.
+- [ ] Final `make verify` reports complete verification, or remaining bootstrap gaps are explicit.
+- [ ] Git CI uses the same `make verify` entrypoint when CI is part of the project.

@@ -2,21 +2,29 @@
 
 [English](./getting-started.md) | [繁體中文](./getting-started.zh-TW.md) | [回到 README](../README.zh-TW.md)
 
-這份教學會把 `vibe-engineering-base` 客製化成 Codex 能獨立理解並驗證的專案。
+若要將這套系統加入既有專案，使用 user scope 的 `$vibe-engineering` Skill。若要建立新的 Git repository，使用 GitHub Template。[README](../README.zh-TW.md#選擇使用方式)提供兩種路徑可直接複製的指令。
 
-## 前置需求
+## 環境需求
 
-- Git。
 - Codex Desktop、CLI 或 IDE extension。
 - Bash 3.2 以上的 macOS，或使用 Bash 的 Linux。
+- 只有 Template 路徑或既有 Git repository 需要 Git。
 
-Base 不限制程式語言、package manager 或 framework。
+Harness 不限制應用程式語言、package manager、framework、ticket tracker 或 domain 文件結構。
 
-## 1. 建立 repository
+## 既有專案
 
-開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template** 並建立新 repository。Clone 後從 repository root 在 Codex 開啟。
+以 `$skill-installer` 安裝 `skills/vibe-engineering`，接著在目標資料夾呼叫 `$vibe-engineering`。Setup 在寫入前一定會產生預覽；它會保留 `AGENTS.md` managed block 以外的內容，並把管理中的檔案與 checksum 記錄於 `.agents/vibe-engineering/manifest.json`。
 
-如果沒有 template 按鈕：
+Git repository 會取得理解 Git 的指引。一般資料夾同樣會取得長期指引、Contract 與 project learning Skill，但不會假設 Git、CI、branch、commit 或 pull request。Setup、status、upgrade 與 learn 行為請參考 [Skills 指南](./skills.zh-TW.md#user-scope-vibe-engineering)。
+
+## 從 Template 建立新專案
+
+### 1. 建立自己的 repository
+
+開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template**，在自己的帳號或 organization 建立 repository。Clone 後，在 Codex 開啟 repository root。
+
+如果沒有 template 按鈕，可以一般 clone，然後解除與 source 的連結：
 
 ```bash
 git clone https://github.com/pong1013/vibe-engineering-base.git my-project
@@ -24,92 +32,58 @@ cd my-project
 git remote remove origin
 ```
 
-先建立目的 repository，再加入它的 remote。
+交付前先建立目的 repository，再將它加入為 `origin`。不要把衍生專案 push 到 source remote。
 
-## 2. 確認 bootstrap
+### 2. 將設定 prompt 交給 Codex
 
-執行：
+貼上[從 Template 建立新專案](../README.zh-TW.md#從-template-建立新專案)中的完整 prompt。它會要求 Codex 先檢查 repository，只詢問會影響結果的重要缺漏，並在同一個設定任務中完成：
+
+- 專案身分與產品 README；
+- 可長期保存的 `AGENTS.md` 指引；
+- specification、tracker、domain 與 ADR 入口；
+- 包含真實 workspace 與 delivery 政策的 bootstrap Project Contract；
+- 真正的產品 test、lint、typecheck 與 build 命令；
+- 透過 `harness-feedback` 進行 repository learning。
+
+複製的 source 檔案含有維護 `vibe-engineering-base` 使用的引用，包括 source tracker 身分。設定時必須用新專案資訊取代，或標記為 unconfigured；不得將工作發佈到 `pong1013/vibe-engineering-base`。
+
+Global Workflow 是另一項 user scope 能力。這個 Template 不會安裝或修改它，設定專案也不以它為必要條件。
+
+### 3. 讓 Contract 如實反映狀態
+
+設定期間使用以下 verification 值：
+
+```text
+- Status: bootstrap
+- Bootstrap verification: `make verify`
+- Complete verification: unconfigured
+```
+
+當 `scripts/harness/project-checks.sh` 還沒有具實質意義的產品命令時，維持 `PROJECT_CHECKS_CONFIGURED=0`。未知的 tracker、domain、branch 與 delivery 值應維持 unconfigured，不要猜測。
+
+接上真正的 checks 後，設定 `PROJECT_CHECKS_CONFIGURED=1`，將 Contract 改成 `Status: complete`，並把 Complete verification 設為 `make verify`。Contract 是精簡索引；架構說明應放在專案文件中。
+
+[Harness 參考](./harness.zh-TW.md#設定-project-checks)說明如何接上產品 checks，並保留命令的失敗狀態。
+
+### 4. 最後才驗證
+
+Repository 已描述真正的專案，而且產品 checks 已接上後，再執行：
 
 ```bash
 make verify
 ```
 
-第一次會顯示 Harness、repository Skills 與 Project Contract 通過，但產品 checks 尚未設定。這證明範本可運作，不代表產品測試、lint 或 build 已執行。
+完整設定的專案最後會顯示 `Project checks: passed`、`Overall: verification passed` 與 `HARNESS_VERIFICATION_STATUS=complete`。
 
-輸出也會包含 `HARNESS_VERIFICATION_STATUS=bootstrap`。即使 bootstrap 自我檢查的 exit code 是成功，Workflow controller 仍必須將此狀態視為不完整。
-
-## 3. 加入專案資訊與長期規則
-
-用產品真正的介紹與設定方式取代根目錄 README。將 `AGENTS.md` 的 `Project-specific guidance` 換成幾乎每次修改都適用的架構邊界、標準命令、相容性需求與不變條件。
-
-## 4. 設定 Project Contract
-
-編輯 `.agents/project-contract.md`：
-
-- 產品 checks 尚未接上前，保留 `Status: bootstrap`，將 Bootstrap verification 設為 `make verify`，並保留 `Complete verification: unconfigured`。
-- 讓 Knowledge 指向真正的專案指引、domain 語言與 ADR 位置。
-- 選擇 specification 位置，並在存在 tracker 時設定 ticket backend。
-- 只有專案真的有政策時才記錄 workspace 或 branch naming。
-- Delivery mode 選擇 `none`、`commit-only`、`push`、`pull-request` 或 `merge-request`。
-
-未知值在決策完成前保持 unconfigured。Contract 是精簡索引，不是第二份架構文件。
-
-若要使用另外安裝的 `$ai-workflow`，先設定新 repository 的 Git remote，再於該 repository 執行 `$setup-matt-pocock-skills`。檢查預覽並確認寫入，讓 `docs/agents/issue-tracker.md`、`docs/agents/domain.md` 與 Agent skills 區塊都指向**你的** repository。範本中的 tracker 身分屬於 `pong1013/vibe-engineering-base`；衍生專案不得沿用它發佈 issues。完成 setup 後，讓兩個 Work artifacts 欄位指向產生的 tracker 檔案：
-
-```text
-- Specifications: configured by `docs/agents/issue-tracker.md`
-- Ticket backend: configured by `docs/agents/issue-tracker.md`
-```
-
-完成下一步的產品 checks 前，Contract 應維持 `Status: bootstrap`。驗證仍為 bootstrap 時，`$ai-workflow` 無法發佈 tickets 或實作 feature。
-
-## 5. 接上產品 checks
-
-編輯 `scripts/harness/project-checks.sh`，用真正的命令取代停用區塊，並設定 `PROJECT_CHECKS_CONFIGURED=1`。
-
-Node.js 範例：
-
-```bash
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-PROJECT_CHECKS_CONFIGURED=1
-
-npm run lint
-npm test
-npm run build
-```
-
-Python 範例：
-
-```bash
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-PROJECT_CHECKS_CONFIGURED=1
-
-python -m ruff check .
-python -m pytest
-```
-
-使用 repository 原本的標準工具，並保留非零 exit status。詳情請閱讀 [Harness 參考](./harness.zh-TW.md)。
-
-接著把 Project Contract 改成 `Status: complete`，並將 Complete verification 設成 `make verify`。只有這個狀態才能讓 controller 進入 Delivery。
-
-## 6. 檢查 repository Skills
-
-閱讀 [Skills 指南](./skills.zh-TW.md)。如果專案應該從具體開發證據持續學習，就保留 `harness-feedback`；不需要時則移除。只有可重複的專案特定判斷才新增 repository Skill。
-
-重新執行 `make verify`。設定完整的專案應顯示 `Project checks: passed` 與 `Overall: verification passed`。
+若尚未有具實質意義的產品 checks，Contract 應維持 bootstrap。驗證可以確認 Harness 本身，但最後回報必須列出缺少的 checks，且不得宣稱產品驗證 complete。
 
 ## 完成清單
 
-- [ ] 已用產品 README 取代範本首頁。
-- [ ] `AGENTS.md` 描述真正的專案規則。
+- [ ] 已用產品 README 取代 template 首頁。
+- [ ] `AGENTS.md` 描述真正的架構邊界、不變條件與標準命令。
+- [ ] Source repository 與 tracker 身分已移除或取代。
 - [ ] `.agents/project-contract.md` 指向實際的命令、位置與政策。
-- [ ] 已設定 `PROJECT_CHECKS_CONFIGURED=1`，而且產品 checks 會執行真正命令。
-- [ ] 已檢查 repository Skills。
-- [ ] 本機 `make verify` 顯示完整驗證通過。
-- [ ] CI 使用同一個 `make verify` 入口。
+- [ ] 只有產品 checks 執行真正命令時，才設定 `PROJECT_CHECKS_CONFIGURED=1`。
+- [ ] 已檢查 repository Skills；除非刻意移除，否則 `harness-feedback` 仍保持啟用。
+- [ ] 最後的 `make verify` 顯示完整驗證通過，或明確列出剩餘 bootstrap 缺口。
+- [ ] 若專案使用 Git CI，CI 會執行同一個 `make verify` 入口。

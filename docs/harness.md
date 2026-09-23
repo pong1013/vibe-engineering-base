@@ -75,7 +75,7 @@ Run `make verify` after changing code, project guidance, Skills, checks, or Harn
 
 The source repository sets `PROJECT_CHECKS_CONFIGURED=1` and verifies its repository Skills and Project Contract. Because the base cannot know a derived project's language or toolchain, project onboarding must reset that flag to `0` and replace the source checks with the derived project's canonical test, lint, build, or other verification commands. Change it back to `1` only after those commands are configured.
 
-Keep `set -euo pipefail` and do not swallow failures. This allows the original non-zero status to reach `make verify` and CI. Copyable Node.js and Python examples are in [Getting Started](./getting-started.md#5-connect-product-checks).
+Keep `set -euo pipefail` and do not swallow failures. This allows the original non-zero status to reach `make verify` and CI. The onboarding sequence keeps the Contract honest while checks are being selected and wired; see [Keep the Contract honest](./getting-started.md#3-keep-the-contract-honest).
 
 ## CI
 

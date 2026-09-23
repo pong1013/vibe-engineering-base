@@ -108,7 +108,7 @@ test_source_project_checks_pass() {
     fail "source project checks should pass"
     return
   fi
-  [[ "${output}" == *"Validated 2 active repository skill(s)."* ]] || \
+  [[ "${output}" == *"Validated 1 active repository skill(s)."* ]] || \
     fail "source checks did not validate repository Skills"
   [[ "${output}" == *"Validated Project Contract (complete)"* ]] || \
     fail "source checks did not validate the complete Project Contract"
@@ -359,12 +359,63 @@ test_invalid_invocation_policy_fails() {
 
 test_bundled_skills_are_complete() {
   local feedback_metadata="${ROOT_DIR}/.agents/skills/harness-feedback/agents/openai.yaml"
-  local grill_metadata="${ROOT_DIR}/.agents/skills/grill-with-docs/agents/openai.yaml"
 
-  grep -Eq '^  allow_implicit_invocation: false[[:space:]]*$' \
-    "${grill_metadata}" || fail "grill-with-docs must remain explicit-only during Contract delivery"
+  [[ ! -e "${ROOT_DIR}/.agents/skills/grill-with-docs" ]] || \
+    fail "grill-with-docs must not remain repository-scoped"
   grep -Eq '^  allow_implicit_invocation: true[[:space:]]*$' \
     "${feedback_metadata}" || fail "harness-feedback must allow implicit invocation"
+}
+
+test_onboarding_leads_with_two_entrypoints() {
+  python3 - "${ROOT_DIR}/README.md" "${ROOT_DIR}/README.zh-TW.md" <<'PY'
+from pathlib import Path
+import sys
+
+for filename in sys.argv[1:]:
+    text = Path(filename).read_text()
+    existing = text.index("skills/vibe-engineering")
+    template = text.index("Use this template")
+    harness = text.index("## How the Harness") if filename.endswith("README.md") else text.index("## Harness 如何運作")
+    if not (existing < harness and template < harness):
+        raise SystemExit(f"entrypoints must appear before Harness internals: {filename}")
+PY
+}
+
+test_template_prompt_covers_configuration_before_verification() {
+  python3 - "${ROOT_DIR}/README.md" "${ROOT_DIR}/README.zh-TW.md" <<'PY'
+from pathlib import Path
+import sys
+
+required = {
+    "README.md": [
+        "project identity", "AGENTS.md", "tracker", "domain", "Status: bootstrap",
+        "PROJECT_CHECKS_CONFIGURED=1", "make verify", "remaining bootstrap gaps",
+    ],
+    "README.zh-TW.md": [
+        "專案身分", "AGENTS.md", "tracker", "domain", "Status: bootstrap",
+        "PROJECT_CHECKS_CONFIGURED=1", "make verify", "仍未完成的 bootstrap 項目",
+    ],
+}
+for filename in sys.argv[1:]:
+    text = Path(filename).read_text()
+    start = text.index("<!-- template-setup-prompt:start -->")
+    end = text.index("<!-- template-setup-prompt:end -->")
+    prompt = text[start:end]
+    missing = [term for term in required[Path(filename).name] if term not in prompt]
+    if missing:
+        raise SystemExit(f"incomplete template prompt in {filename}: {missing}")
+    if prompt.index("make verify") < prompt.index("PROJECT_CHECKS_CONFIGURED=1"):
+        raise SystemExit(f"verification occurs before product checks in {filename}")
+PY
+}
+
+test_active_docs_do_not_reference_repository_grill() {
+  local references
+  references="$(grep -R -n 'grill-with-docs' \
+    "${ROOT_DIR}/README.md" "${ROOT_DIR}/README.zh-TW.md" \
+    "${ROOT_DIR}/docs/skills.md" "${ROOT_DIR}/docs/skills.zh-TW.md" \
+    "${ROOT_DIR}/docs/agents" || true)"
+  [[ -z "${references}" ]] || fail "active documentation still references repository grill-with-docs"
 }
 
 test_project_check_success_propagates() {
@@ -459,6 +510,61 @@ test_markdown_internal_links_resolve() {
   [[ "${failed}" -eq 0 ]] || fail "one or more Markdown links do not resolve"
 }
 
+test_markdown_internal_anchors_resolve() {
+  python3 - "${ROOT_DIR}" <<'PY'
+from pathlib import Path
+import re
+import sys
+from urllib.parse import unquote
+
+root = Path(sys.argv[1])
+link_pattern = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
+
+
+def heading_anchors(path):
+    anchors = set()
+    counts = {}
+    in_fence = False
+    for line in path.read_text().splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+        heading = re.sub(r"<[^>]+>", "", match.group(1)).replace("`", "").lower()
+        slug = "".join(char for char in heading if char.isalnum() or char in " _-")
+        slug = re.sub(r"\s+", "-", slug.strip())
+        count = counts.get(slug, 0)
+        counts[slug] = count + 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    return anchors
+
+
+failures = []
+for source in sorted(root.rglob("*.md")):
+    if ".git" in source.parts:
+        continue
+    for raw_target in link_pattern.findall(source.read_text()):
+        if raw_target.startswith(("http://", "https://", "mailto:", "/")) or "#" not in raw_target:
+            continue
+        relative, raw_anchor = raw_target.split("#", 1)
+        if not raw_anchor:
+            continue
+        target = source if not relative else (source.parent / unquote(relative)).resolve()
+        if not target.is_file():
+            continue
+        anchor = unquote(raw_anchor).lower()
+        if anchor not in heading_anchors(target):
+            failures.append(f"{source.relative_to(root)} -> {raw_target}")
+
+if failures:
+    raise SystemExit("Broken Markdown heading anchors:\n" + "\n".join(failures))
+PY
+}
+
 test_bilingual_document_pairs_exist() {
   local english_file
   local translated_file
@@ -519,11 +625,15 @@ run_test "verification configuration conflict fails" test_verification_configura
 run_test "bootstrap Project Contract passes" test_bootstrap_contract_passes
 run_test "misplaced Project Contract field fails" test_misplaced_contract_field_fails
 run_test "bundled Skills are complete" test_bundled_skills_are_complete
+run_test "onboarding leads with two entrypoints" test_onboarding_leads_with_two_entrypoints
+run_test "template prompt configures before verification" test_template_prompt_covers_configuration_before_verification
+run_test "active docs omit repository grill" test_active_docs_do_not_reference_repository_grill
 run_test "successful project checks propagate" test_project_check_success_propagates
 run_test "bootstrap Contract prevents complete machine status" test_bootstrap_contract_prevents_complete_machine_status
 run_test "failed project checks propagate" test_project_check_failure_propagates
 run_test "audit requires Codex CLI" test_audit_requires_codex
 run_test "Markdown internal links resolve" test_markdown_internal_links_resolve
+run_test "Markdown internal anchors resolve" test_markdown_internal_anchors_resolve
 run_test "bilingual document pairs exist" test_bilingual_document_pairs_exist
 run_test "README versions match VERSION" test_readmes_match_version
 

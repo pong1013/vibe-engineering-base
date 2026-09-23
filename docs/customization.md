@@ -71,8 +71,10 @@ The included workflow verifies the repository on Ubuntu and macOS. Adjust the ma
 
 Native Windows and WSL are not officially supported by base version `0.1.0`.
 
-## Base updates
+## Existing-project setup and updates
 
-Version `0.1.0` has no installer, automatic merge, or upgrade mechanism for existing repositories. After customization, the derived repository owns its copies of `AGENTS.md`, the Project Contract, Skills, scripts, tests, and workflows. Review later base changes manually instead of overwriting project-specific files.
+Install the user-scoped Skill from `skills/vibe-engineering` with `$skill-installer`, then use `$vibe-engineering` in the selected writable project folder. It supports setup, read-only status, conflict-safe upgrade, and evidence-based learn intents. The [Skills guide](./skills.md#user-scoped-vibe-engineering) provides the installation prompt and behavior of each intent.
 
-Requirements for a future conflict-safe installer are tracked in [`TODO.md`](../TODO.md).
+Setup and upgrade preview their operations before writing. The manifest at `.agents/vibe-engineering/manifest.json` records the installed source version, selected capabilities, managed paths, and checksums. Upgrade can replace an unchanged managed file; a locally modified managed file remains a conflict until the user reviews and explicitly selects that replacement. A stale preview or failed validation does not leave a partial update.
+
+Files outside the managed set, content outside the bounded `AGENTS.md` block, and project-created Skills remain project-owned. Review changes to those files as ordinary project changes rather than expecting the Skill to merge or overwrite them.

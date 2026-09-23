@@ -71,8 +71,10 @@
 
 Base `0.1.0` 不正式支援原生 Windows 與 WSL。
 
-## Base 更新
+## 既有專案的設定與更新
 
-`0.1.0` 沒有把專案範本安裝、自動合併或升級到既有 repository 的機制。完成設定後，衍生專案擁有自己的 `AGENTS.md`、Project Contract、Skills、scripts、測試與 workflows。後續範本變更應手動 review，不應覆蓋專案專屬檔案。
+使用 `$skill-installer` 從 `skills/vibe-engineering` 安裝 user scope Skill，接著在選定的可寫入專案資料夾使用 `$vibe-engineering`。它支援 setup、唯讀 status、可安全處理衝突的 upgrade，以及以證據為基礎的 learn intent。[Skills 指南](./skills.zh-TW.md#user-scope-vibe-engineering)提供安裝 prompt 與各 intent 的行為說明。
 
-未來安全處理衝突的 installer 需求記錄在 [`TODO.md`](../TODO.md)。
+Setup 與 upgrade 會在寫入前預覽操作。`.agents/vibe-engineering/manifest.json` 會記錄已安裝的 source version、選定能力、managed paths 與 checksums。Upgrade 可以取代未修改的 managed file；若 managed file 已在本機修改，則會維持 conflict，直到使用者 review 並明確選擇 replacement。過期的預覽或失敗的驗證不會留下部分更新。
+
+Managed set 以外的檔案、`AGENTS.md` bounded block 以外的內容，以及專案建立的 Skills 仍由專案擁有。這些檔案的變更應比照一般專案修改進行 review，不應期待 Skill 自動合併或覆蓋。

@@ -75,7 +75,7 @@ make harness-audit  # 以唯讀 Codex audit 尋找可長期保留的 Harness 改
 
 Source repository 使用 `PROJECT_CHECKS_CONFIGURED=1` 驗證自己的 repository Skills 與 Project Contract。因為 base 無法預先知道衍生專案的語言或 toolchain，專案 onboarding 必須先把這個值重設為 `0`，並以衍生專案標準的 test、lint、build 或其他驗證命令取代 source checks。這些命令設定完成後，才能改回 `1`。
 
-保留 `set -euo pipefail`，也不要攔截失敗。這樣原始的非零 status 才能傳到 `make verify` 與 CI。可直接使用的 Node.js 與 Python 範例放在[入門教學](./getting-started.zh-TW.md#5-接上產品-checks)。
+保留 `set -euo pipefail`，也不要攔截失敗。這樣原始的非零 status 才能傳到 `make verify` 與 CI。選擇並接上 checks 的過程應讓 Contract 如實反映狀態；請參考[讓 Contract 如實反映狀態](./getting-started.zh-TW.md#3-讓-contract-如實反映狀態)。
 
 ## CI
 
