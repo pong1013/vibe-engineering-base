@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -20,15 +21,23 @@ SOURCE_VERSION = (SKILL_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 MANIFEST_PATH = Path(".agents/vibe-engineering/manifest.json")
 BLOCK_START = "<!-- vibe-engineering:start -->"
 BLOCK_END = "<!-- vibe-engineering:end -->"
-MANAGED_BLOCK = """<!-- vibe-engineering:start -->
+LEARNED_START = "<!-- vibe-engineering:learned:start -->"
+LEARNED_END = "<!-- vibe-engineering:learned:end -->"
+MANAGED_BLOCK_TEMPLATE = """<!-- vibe-engineering:start -->
 ## Vibe Engineering Harness
 
 - Read `.agents/project-contract.md` before changing this project.
 - Keep reusable project workflows in `.agents/skills/`.
 - Use `$harness-feedback` when concrete evidence justifies a durable Harness improvement.
+<!-- vibe-engineering:learned:start -->
+{learned}<!-- vibe-engineering:learned:end -->
 <!-- vibe-engineering:end -->"""
 DEFAULT_CAPABILITIES = ("harness", "harness-feedback")
 KNOWN_CAPABILITIES = frozenset(DEFAULT_CAPABILITIES)
+LEARN_CATEGORIES = frozenset(
+    ("preference", "reversible-choice", "machine-checkable", "repository-guidance", "project-skill")
+)
+SAFE_IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 
 class UserError(Exception):
@@ -66,6 +75,388 @@ def validate_target(raw_target: str) -> Path:
     if not os.access(target, os.W_OK | os.X_OK):
         raise UserError("target must be writable")
     return target
+
+
+def read_evidence(raw_path: str) -> tuple[dict[str, Any], str]:
+    path = Path(raw_path).expanduser()
+    state = path_state(path)
+    if state["kind"] != "file":
+        raise UserError("evidence file must be a regular file and not a symbolic link")
+    content = path.read_bytes()
+    if len(content) > 64 * 1024:
+        raise UserError("evidence file is too large")
+    try:
+        evidence = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise UserError("evidence file is not valid UTF-8 JSON") from None
+    if (
+        not isinstance(evidence, dict)
+        or type(evidence.get("schema_version")) is not int
+        or evidence["schema_version"] != 1
+    ):
+        raise UserError("evidence file has an unsupported schema")
+    if evidence.get("category") not in LEARN_CATEGORIES:
+        raise UserError("evidence category is invalid")
+    pattern_id = evidence.get("pattern_id")
+    if not isinstance(pattern_id, str) or not SAFE_IDENTIFIER.fullmatch(pattern_id):
+        raise UserError("evidence pattern_id must be a safe lowercase identifier")
+    if type(evidence.get("explicit_standard")) is not bool:
+        raise UserError("evidence explicit_standard must be a boolean")
+    occurrences = evidence.get("occurrences")
+    if not isinstance(occurrences, list):
+        raise UserError("evidence occurrences must be a list")
+    occurrence_ids: list[str] = []
+    for occurrence in occurrences:
+        if not isinstance(occurrence, dict) or set(occurrence) != {"id"}:
+            raise UserError("each evidence occurrence must contain only an id")
+        occurrence_id = occurrence.get("id")
+        if not isinstance(occurrence_id, str) or not SAFE_IDENTIFIER.fullmatch(occurrence_id):
+            raise UserError("evidence occurrence id must be a safe lowercase identifier")
+        occurrence_ids.append(occurrence_id)
+    if len(occurrence_ids) != len(set(occurrence_ids)):
+        raise UserError("evidence occurrence ids must be distinct")
+    guidance = evidence.get("guidance")
+    if not isinstance(guidance, list) or not guidance or not all(
+        isinstance(item, str) and item.strip() for item in guidance
+    ):
+        raise UserError("evidence guidance must be a non-empty list of text")
+    for value in [pattern_id, *occurrence_ids, *guidance]:
+        validate_evidence_text(value)
+    common_fields = {
+        "schema_version", "category", "pattern_id", "occurrences", "explicit_standard", "guidance"
+    }
+    category = evidence["category"]
+    extra_fields: set[str] = set()
+    if category == "project-skill":
+        extra_fields = {"skill_name", "trigger"}
+    elif category == "machine-checkable":
+        extra_fields = {"check_surface"}
+    unknown = set(evidence) - common_fields - extra_fields
+    if unknown:
+        raise UserError(f"evidence contains unsupported fields: {', '.join(sorted(unknown))}")
+    return evidence, digest(content)
+
+
+def validate_evidence_text(value: str) -> None:
+    if len(value) > 1000 or "\n" in value or "\r" in value or "\x00" in value:
+        raise UserError("evidence text must be bounded single-line text")
+    secret_patterns = (
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"\bghp_[A-Za-z0-9]{20,}\b",
+        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+        r"\bAKIA[A-Z0-9]{16}\b",
+        r"\bsk-[A-Za-z0-9]{20,}\b",
+        r"\b(?:api[_-]?key|password|token)\s*[:=]\s*\S+",
+    )
+    if any(re.search(pattern, value, re.IGNORECASE) for pattern in secret_patterns):
+        raise UserError("evidence appears to contain a secret; remove it before learning")
+    if BLOCK_START in value or BLOCK_END in value or "<!-- vibe-engineering:" in value:
+        raise UserError("evidence must not contain managed block markers")
+
+
+def project_skill_content(evidence: dict[str, Any]) -> bytes:
+    skill_name = evidence.get("skill_name")
+    trigger = evidence.get("trigger")
+    guidance = evidence["guidance"]
+    if not isinstance(skill_name, str) or not SAFE_IDENTIFIER.fullmatch(skill_name):
+        raise UserError("project Skill name must be a safe lowercase identifier")
+    if not isinstance(trigger, str):
+        raise UserError("project Skill trigger must be text")
+    validate_evidence_text(trigger)
+    if len(trigger) < 24 or len(trigger.split()) < 5:
+        raise UserError("project Skill trigger is not distinct enough")
+    if len(guidance) < 2 or any(len(item) < 24 for item in guidance):
+        raise UserError("project Skill needs at least two reusable guidance items")
+    if any(item.casefold() == trigger.casefold() for item in guidance):
+        raise UserError("project Skill trigger and guidance must be distinct")
+    title = " ".join(part.capitalize() for part in skill_name.split("-"))
+    description = trigger.rstrip(".") + "."
+    content = (
+        "---\n"
+        f"name: {skill_name}\n"
+        f"description: {json.dumps(description)}\n"
+        "---\n\n"
+        f"# {title}\n\n"
+        + "\n".join(f"- {item}" for item in guidance)
+        + "\n"
+    ).encode("utf-8")
+    validate_generated_skill(content, skill_name)
+    return content
+
+
+def project_skill_metadata(skill_name: str) -> bytes:
+    display_name = " ".join(part.capitalize() for part in skill_name.split("-"))
+    return (
+        "interface:\n"
+        f"  display_name: {json.dumps(display_name)}\n"
+        '  short_description: "Apply this reusable project workflow"\n'
+        f"  default_prompt: {json.dumps('Use $' + skill_name + ' for this project task.')}\n"
+    ).encode("utf-8")
+
+
+def validate_generated_skill(content: bytes, expected_name: str) -> None:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise UserError("generated project Skill is not UTF-8") from None
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise UserError("generated project Skill has invalid frontmatter")
+    frontmatter = text.split("---\n", 2)[1]
+    if f"name: {expected_name}\n" not in frontmatter or "description: " not in frontmatter:
+        raise UserError("generated project Skill is missing required metadata")
+    if "TODO" in text or "[TODO" in text:
+        raise UserError("generated project Skill contains unfinished placeholders")
+
+
+def build_project_skill_learn_plan(
+    target: Path, evidence: dict[str, Any], evidence_digest: str
+) -> tuple[dict[str, Any], dict[Path, bytes]]:
+    meets_threshold = len(evidence["occurrences"]) >= 2 or evidence["explicit_standard"] is True
+    if not meets_threshold:
+        return (
+            {
+                "command": "learn",
+                "mode": "preview",
+                "target": str(target),
+                "decision": "insufficient-evidence",
+                "reason": "project-skill-requires-two-distinct-occurrences-or-explicit-standard",
+            },
+            {},
+        )
+    content = project_skill_content(evidence)
+    skill_name = evidence["skill_name"]
+    skill_dir = Path(".agents/skills") / skill_name
+    relative = skill_dir / "SKILL.md"
+    metadata_relative = skill_dir / "agents/openai.yaml"
+    metadata_content = project_skill_metadata(skill_name)
+    ensure_safe_write_path(target, relative)
+    ensure_safe_write_path(target, metadata_relative)
+    directory_state = path_state(target / skill_dir)
+    file_state = path_state(target / relative)
+    metadata_state = path_state(target / metadata_relative)
+    operation: dict[str, Any] = {
+        "path": relative.as_posix(),
+        "action": "create",
+        "content": content.decode("utf-8"),
+    }
+    if directory_state["kind"] != "missing" or file_state["kind"] != "missing":
+        operation["action"] = "conflict"
+        operation["reason"] = "existing-project-skill"
+        if file_state["kind"] == "file":
+            operation["diff"] = review_diff(relative, (target / relative).read_bytes(), content)
+        return (
+            {
+                "command": "learn",
+                "mode": "preview",
+                "target": str(target),
+                "decision": "propose-project-skill",
+                "operation": operation,
+            },
+            {},
+        )
+    token_input = {
+        "command": "learn",
+        "target": str(target),
+        "evidence_sha256": evidence_digest,
+        "destination": relative.as_posix(),
+        "observed_directory": directory_state,
+        "observed_file": file_state,
+        "observed_metadata": metadata_state,
+        "desired_sha256": digest(content),
+        "metadata_sha256": digest(metadata_content),
+    }
+    plan_token = digest(json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode())
+    return (
+        {
+            "command": "learn",
+            "mode": "preview",
+            "target": str(target),
+            "decision": "propose-project-skill",
+            "operation": operation,
+            "plan_token": plan_token,
+        },
+        {relative: content, metadata_relative: metadata_content},
+    )
+
+
+def build_machine_check_learn_plan(
+    target: Path, evidence: dict[str, Any], evidence_digest: str
+) -> tuple[dict[str, Any], dict[Path, bytes]]:
+    surface = evidence.get("check_surface")
+    if surface not in ("tests", "linters", "harness-checks"):
+        raise UserError("machine-checkable evidence requires a known check_surface")
+    pattern_id = evidence["pattern_id"]
+    relative = Path(".agents/vibe-engineering/proposals/checks") / f"{pattern_id}.md"
+    content = (
+        f"# Check proposal: {pattern_id}\n\n"
+        f"Target surface: `{surface}`\n\n"
+        "## Required behavior\n\n"
+        + "\n".join(f"- {item}" for item in evidence["guidance"])
+        + "\n\n## Implementation boundary\n\n"
+        "Review this proposal and implement it in the selected existing check surface. "
+        "Keep executable logic out of this proposal.\n"
+    ).encode("utf-8")
+    ensure_safe_write_path(target, relative)
+    observed = path_state(target / relative)
+    operation: dict[str, Any] = {
+        "path": relative.as_posix(),
+        "action": "create",
+        "content": content.decode("utf-8"),
+    }
+    if observed["kind"] != "missing":
+        operation.update(action="conflict", reason="existing-check-proposal")
+        if observed["kind"] == "file":
+            operation["diff"] = review_diff(relative, (target / relative).read_bytes(), content)
+        return (
+            {
+                "command": "learn",
+                "mode": "preview",
+                "target": str(target),
+                "decision": "propose-machine-check",
+                "operation": operation,
+            },
+            {},
+        )
+    token_input = {
+        "command": "learn",
+        "target": str(target),
+        "evidence_sha256": evidence_digest,
+        "destination": relative.as_posix(),
+        "observed": observed,
+        "desired_sha256": digest(content),
+    }
+    plan_token = digest(json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode())
+    return (
+        {
+            "command": "learn",
+            "mode": "preview",
+            "target": str(target),
+            "decision": "propose-machine-check",
+            "operation": operation,
+            "plan_token": plan_token,
+        },
+        {relative: content},
+    )
+
+
+def build_repository_guidance_learn_plan(
+    target: Path, evidence: dict[str, Any], evidence_digest: str, manifest: dict[str, Any]
+) -> tuple[dict[str, Any], dict[Path, bytes]]:
+    if "harness" not in manifest.get("capabilities", []):
+        raise UserError("repository guidance requires the harness capability")
+    relative = Path("AGENTS.md")
+    ensure_safe_write_path(target, relative)
+    state = path_state(target / relative)
+    if state["kind"] != "file":
+        raise UserError("managed AGENTS.md must be a regular file")
+    current = (target / relative).read_bytes()
+    entries = validated_manifest_entries(manifest)
+    agents_entry = entries.get(relative)
+    if agents_entry is None or agents_entry.get("scope") != "managed-block":
+        raise UserError("manifest does not own the AGENTS.md managed block")
+    if managed_block_checksum(current) != agents_entry["sha256"]:
+        raise UserError("managed AGENTS.md guidance is locally modified; review it before learning")
+    desired = update_agents(current)
+    text = desired.decode("utf-8")
+    additions = [f"- {item}" for item in evidence["guidance"]]
+    learned_lines = {
+        line
+        for line in text.split(LEARNED_START, 1)[1].split(LEARNED_END, 1)[0].splitlines()
+        if line
+    }
+    if all(addition in learned_lines for addition in additions):
+        return (
+            {
+                "command": "learn",
+                "mode": "preview",
+                "target": str(target),
+                "decision": "already-covered",
+            },
+            {},
+        )
+    learned = text.split(LEARNED_START, 1)[1].split(LEARNED_END, 1)[0].lstrip("\n")
+    existing_lines = {line for line in learned.splitlines() if line}
+    new_lines = [line for line in additions if line not in existing_lines]
+    updated_learned = learned + "".join(f"{line}\n" for line in new_lines)
+    desired = text.replace(
+        LEARNED_START + "\n" + learned + LEARNED_END,
+        LEARNED_START + "\n" + updated_learned + LEARNED_END,
+        1,
+    ).encode("utf-8")
+
+    updated_manifest = json.loads(json.dumps(manifest))
+    for entry in updated_manifest["managed"]:
+        if entry.get("path") == relative.as_posix():
+            entry["sha256"] = managed_block_checksum(desired)
+            break
+    manifest_content = json_bytes(updated_manifest)
+    ensure_safe_write_path(target, MANIFEST_PATH)
+    manifest_state = path_state(target / MANIFEST_PATH)
+    operation = {
+        "path": relative.as_posix(),
+        "action": "update-managed-guidance",
+        "diff": review_diff(relative, current, desired),
+    }
+    token_input = {
+        "command": "learn",
+        "target": str(target),
+        "evidence_sha256": evidence_digest,
+        "destination": relative.as_posix(),
+        "observed": state,
+        "observed_manifest": manifest_state,
+        "desired_sha256": digest(desired),
+        "manifest_sha256": digest(manifest_content),
+    }
+    plan_token = digest(json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode())
+    return (
+        {
+            "command": "learn",
+            "mode": "preview",
+            "target": str(target),
+            "decision": "propose-repository-guidance",
+            "operation": operation,
+            "plan_token": plan_token,
+        },
+        {relative: desired, MANIFEST_PATH: manifest_content},
+    )
+
+
+def learn(args: argparse.Namespace) -> dict[str, Any]:
+    target = validate_target(args.target)
+    evidence, evidence_digest = read_evidence(args.evidence_file)
+    if evidence["category"] in ("preference", "reversible-choice"):
+        if args.apply:
+            raise UserError("this evidence is not eligible for durable learning")
+        return {
+            "command": "learn",
+            "mode": "preview",
+            "target": str(target),
+            "decision": "no-durable-change",
+            "reason": "one-off-or-reversible",
+        }
+    manifest = read_manifest(target)
+    if manifest is None:
+        raise UserError("Vibe Engineering is not installed; run setup first")
+    validate_installed_manifest(target, manifest)
+    if evidence["category"] == "project-skill":
+        plan, writes = build_project_skill_learn_plan(target, evidence, evidence_digest)
+    elif evidence["category"] == "machine-checkable":
+        plan, writes = build_machine_check_learn_plan(target, evidence, evidence_digest)
+    elif evidence["category"] == "repository-guidance":
+        plan, writes = build_repository_guidance_learn_plan(
+            target, evidence, evidence_digest, manifest
+        )
+    else:
+        raise UserError("this evidence category is not implemented")
+    if not args.apply:
+        return plan
+    if not args.plan_token:
+        raise UserError("--plan-token is required with --apply")
+    if not plan.get("plan_token") or args.plan_token != plan["plan_token"]:
+        raise UserError("project or evidence state changed after preview; create a new learn preview")
+    transactional_write(target, writes)
+    plan["mode"] = "applied"
+    return plan
 
 
 def path_state(path: Path) -> dict[str, str]:
@@ -120,14 +511,29 @@ def update_agents(existing: bytes | None) -> bytes:
     end_count = text.count(BLOCK_END)
     if start_count != end_count or start_count > 1:
         raise UserError("AGENTS.md contains an invalid Vibe Engineering managed block")
+    learned = ""
     if start_count == 1:
         before, remainder = text.split(BLOCK_START, 1)
-        _, after = remainder.split(BLOCK_END, 1)
-        result = before + MANAGED_BLOCK + after
+        current_block, after = remainder.split(BLOCK_END, 1)
+        learned_start_count = current_block.count(LEARNED_START)
+        learned_end_count = current_block.count(LEARNED_END)
+        if learned_start_count != learned_end_count or learned_start_count > 1:
+            raise UserError("AGENTS.md contains an invalid learned guidance block")
+        if learned_start_count == 1:
+            learned = current_block.split(LEARNED_START, 1)[1].split(LEARNED_END, 1)[0]
+            learned = learned.lstrip("\n")
+        result = before + render_managed_block(learned) + after
     else:
         separator = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-        result = text + separator + MANAGED_BLOCK + "\n"
+        result = text + separator + render_managed_block(learned) + "\n"
     return result.encode("utf-8")
+
+
+def render_managed_block(learned: str) -> str:
+    normalized = learned
+    if normalized and not normalized.endswith("\n"):
+        normalized += "\n"
+    return MANAGED_BLOCK_TEMPLATE.format(learned=normalized)
 
 
 def managed_block_checksum(content: bytes) -> str:
@@ -296,6 +702,61 @@ def validated_manifest_entries(manifest: dict[str, Any]) -> dict[Path, dict[str,
     return entries
 
 
+def expected_manifest_scopes(capabilities: tuple[str, ...]) -> dict[Path, str]:
+    expected: dict[Path, str] = {}
+    if "harness" in capabilities:
+        expected[Path("AGENTS.md")] = "managed-block"
+        expected[Path(".agents/project-contract.md")] = "file"
+    if "harness-feedback" in capabilities:
+        expected[Path(".agents/skills/harness-feedback/SKILL.md")] = "file"
+        expected[Path(".agents/skills/harness-feedback/agents/openai.yaml")] = "file"
+    return expected
+
+
+def validate_installed_manifest(
+    target: Path, manifest: dict[str, Any]
+) -> tuple[str, tuple[str, ...], str, dict[Path, dict[str, str]]]:
+    schema_version = manifest.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
+        raise UserError("manifest has an unsupported schema version")
+    installed_version = manifest.get("source_version")
+    if (
+        not isinstance(installed_version, str)
+        or not installed_version.strip()
+        or len(installed_version) > 128
+    ):
+        raise UserError("manifest has an invalid source version")
+    capabilities_value = manifest.get("capabilities")
+    if (
+        not isinstance(capabilities_value, list)
+        or not capabilities_value
+        or not all(isinstance(value, str) for value in capabilities_value)
+    ):
+        raise UserError("manifest has invalid capabilities")
+    if len(capabilities_value) != len(set(capabilities_value)):
+        raise UserError("manifest contains duplicate capabilities")
+    capabilities = normalize_capabilities(capabilities_value)
+    project_type = detect_project_type(target)
+    if manifest.get("project_type") != project_type:
+        raise UserError("project type changed since setup; installed manifest is inconsistent")
+
+    entries = validated_manifest_entries(manifest)
+    expected = expected_manifest_scopes(capabilities)
+    if set(entries) != set(expected):
+        missing = sorted(path.as_posix() for path in set(expected) - set(entries))
+        unexpected = sorted(path.as_posix() for path in set(entries) - set(expected))
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected {', '.join(unexpected)}")
+        raise UserError(f"manifest managed paths do not match capabilities: {'; '.join(details)}")
+    for relative, scope in expected.items():
+        if entries[relative]["scope"] != scope:
+            raise UserError(f"manifest contains an invalid scope for {relative.as_posix()}")
+    return installed_version, capabilities, project_type, entries
+
+
 def checksum_for_scope(path: Path, scope: str) -> str:
     if scope == "managed-block":
         return managed_block_checksum(path.read_bytes())
@@ -327,28 +788,10 @@ def build_upgrade_plan(
     manifest = read_manifest(target)
     if manifest is None:
         raise UserError("Vibe Engineering is not installed; run setup first")
-    if manifest.get("schema_version") != 1:
-        raise UserError("manifest has an unsupported schema version")
-    installed_version = manifest.get("source_version")
-    if not isinstance(installed_version, str) or not installed_version:
-        raise UserError("manifest has an invalid source version")
-    capabilities_value = manifest.get("capabilities")
-    if not isinstance(capabilities_value, list) or not all(
-        isinstance(value, str) for value in capabilities_value
-    ):
-        raise UserError("manifest has invalid capabilities")
-    capabilities = normalize_capabilities(capabilities_value)
-    project_type = detect_project_type(target)
-    if manifest.get("project_type") != project_type:
-        raise UserError("project type changed since setup; upgrade cannot continue")
-
-    old_entries = validated_manifest_entries(manifest)
+    installed_version, capabilities, project_type, old_entries = validate_installed_manifest(
+        target, manifest
+    )
     desired, new_entries_list = desired_files(target, capabilities, project_type)
-    new_entries = {Path(entry["path"]): entry for entry in new_entries_list}
-    missing_from_source = set(old_entries) - set(new_entries)
-    if missing_from_source:
-        paths = ", ".join(path.as_posix() for path in sorted(missing_from_source, key=str))
-        raise UserError(f"source no longer defines managed paths: {paths}")
 
     if len(resolutions) != len(set(resolutions)):
         raise UserError("duplicate conflict resolution path")
@@ -490,8 +933,8 @@ def transactional_write(target: Path, writes: dict[Path, bytes]) -> None:
             except OSError:
                 pass
         if rollback_errors:
-            raise UserError("upgrade failed and rollback could not restore every managed path") from error
-        raise UserError(f"upgrade write failed; target restored: {error}") from None
+            raise UserError("write failed and rollback could not restore every managed path") from error
+        raise UserError(f"write failed; target restored: {error}") from None
 
 
 def upgrade(args: argparse.Namespace) -> dict[str, Any]:
@@ -589,6 +1032,12 @@ def parser() -> argparse.ArgumentParser:
     upgrade_parser.add_argument("--apply", action="store_true")
     upgrade_parser.add_argument("--plan-token")
     upgrade_parser.set_defaults(handler=upgrade)
+    learn_parser = commands.add_parser("learn", help="preview or apply evidence-based project learning")
+    learn_parser.add_argument("--target", required=True)
+    learn_parser.add_argument("--evidence-file", required=True)
+    learn_parser.add_argument("--apply", action="store_true")
+    learn_parser.add_argument("--plan-token")
+    learn_parser.set_defaults(handler=learn)
     return root
 
 

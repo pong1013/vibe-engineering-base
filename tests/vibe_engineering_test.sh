@@ -70,6 +70,26 @@ apply_upgrade_preview() {
   python3 "${cli}" upgrade --target "${target}" "$@" --apply --plan-token "${token}"
 }
 
+write_evidence() {
+  local path="$1"
+  local content="$2"
+  printf '%s\n' "${content}" > "${path}"
+}
+
+preview_learn() {
+  python3 "${CLI}" learn --target "$1" --evidence-file "$2"
+}
+
+apply_learn_preview() {
+  local target="$1"
+  local evidence_file="$2"
+  local preview="$3"
+  local token
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  python3 "${CLI}" learn --target "${target}" --evidence-file "${evidence_file}" \
+    --apply --plan-token "${token}"
+}
+
 new_upgrader() {
   upgrader_dir="${TEST_TEMP_ROOT}/upgrader-${TESTS_RUN}"
   cp -R "${ROOT_DIR}/skills/vibe-engineering" "${upgrader_dir}"
@@ -582,6 +602,427 @@ PY
     fail "inside-block AGENTS edit was not a conflict"
 }
 
+test_learn_keeps_one_off_choices_outside_durable_files() {
+  new_project
+  local setup_preview evidence_file before preview after
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/one-off-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "preference",
+    "pattern_id": "prefer-short-status",
+    "occurrences": [{"id": "turn-1"}],
+    "explicit_standard": false,
+    "guidance": ["Prefer short progress updates for this one task."]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "no-durable-change" ]] || \
+    fail "one-off preference was not rejected as durable learning"
+  [[ "$(printf '%s' "${preview}" | json_value '"plan_token" in data')" == "False" ]] || \
+    fail "one-off preference unexpectedly returned an apply token"
+  [[ "${before}" == "${after}" ]] || fail "one-off preference changed durable files"
+}
+
+test_learn_rejects_boolean_evidence_schema_without_writes() {
+  new_project
+  local evidence_file before after output
+  evidence_file="${TEST_TEMP_ROOT}/boolean-schema-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": true,
+    "category": "preference",
+    "pattern_id": "short-output",
+    "occurrences": [{"id": "turn-8"}],
+    "explicit_standard": false,
+    "guidance": ["Keep the response short for this one task."]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "boolean evidence schema version was accepted as integer version 1"
+    return
+  fi
+  [[ "${output}" == *"unsupported schema"* ]] || fail "boolean schema refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected boolean schema changed the target"
+}
+
+test_learn_rejects_forged_or_inconsistent_manifests_without_writes() {
+  new_project
+  local setup_preview evidence_file manifest valid_manifest mode before after output
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/manifest-validation-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "machine-checkable",
+    "pattern_id": "verify-generated-files",
+    "occurrences": [{"id": "review-71"}],
+    "explicit_standard": false,
+    "check_surface": "tests",
+    "guidance": ["Reject generated files from the committed source directory."]
+  }'
+  manifest="${test_project}/.agents/vibe-engineering/manifest.json"
+  valid_manifest="$(cat "${manifest}")"
+
+  for mode in empty-managed boolean-schema missing-version wrong-project duplicate-capability unknown-capability bad-checksum wrong-scope; do
+    printf '%s' "${valid_manifest}" > "${manifest}"
+    python3 - "${manifest}" "${mode}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+data = json.loads(path.read_text())
+if mode == "empty-managed":
+    data["managed"] = []
+elif mode == "boolean-schema":
+    data["schema_version"] = True
+elif mode == "missing-version":
+    data.pop("source_version")
+elif mode == "wrong-project":
+    data["project_type"] = "repository" if data["project_type"] == "folder" else "folder"
+elif mode == "duplicate-capability":
+    data["capabilities"].append(data["capabilities"][0])
+elif mode == "unknown-capability":
+    data["capabilities"] = ["unknown-capability"]
+elif mode == "bad-checksum":
+    data["managed"][0]["sha256"] = "not-a-checksum"
+elif mode == "wrong-scope":
+    next(item for item in data["managed"] if item["path"] == "AGENTS.md")["scope"] = "file"
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
+    before="$(snapshot_tree "${test_project}")" || return
+    if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+      fail "learn accepted invalid installed manifest: ${mode}"
+      return
+    fi
+    if [[ "${output}" != *"manifest"* && "${output}" != *"project type"* && \
+      "${output}" != *"capability"* ]]; then
+      fail "invalid manifest refusal was unclear: ${mode}"
+      return
+    fi
+    after="$(snapshot_tree "${test_project}")" || return
+    if [[ "${before}" != "${after}" ]]; then
+      fail "rejected manifest changed the target: ${mode}"
+      return
+    fi
+  done
+}
+
+test_learn_project_skill_requires_distinct_evidence_and_preview() {
+  new_project
+  local setup_preview evidence_file before preview after applied
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/skill-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "project-skill",
+    "pattern_id": "release-notes-context",
+    "occurrences": [{"id": "release-17"}],
+    "explicit_standard": false,
+    "skill_name": "write-release-notes",
+    "trigger": "Use when preparing release notes for this project",
+    "guidance": [
+      "Read the release labels in docs/release-labels.md before grouping changes.",
+      "Call out schema migrations under a dedicated operator action heading."
+    ]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "insufficient-evidence" ]] || \
+    fail "one occurrence unexpectedly met the project Skill threshold"
+  [[ "${before}" == "${after}" ]] || fail "insufficient evidence created durable state"
+
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["occurrences"].append({"id": "release-18"})
+path.write_text(json.dumps(data))
+PY
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "propose-project-skill" ]] || \
+    fail "two distinct occurrences did not propose a project Skill"
+  [[ "$(printf '%s' "${preview}" | json_value 'data["operation"]["path"]')" == ".agents/skills/write-release-notes/SKILL.md" ]] || \
+    fail "project Skill destination was incorrect"
+  [[ ! -e "${test_project}/.agents/skills/write-release-notes" ]] || \
+    fail "project Skill preview wrote files"
+  applied="$(apply_learn_preview "${test_project}" "${evidence_file}" "${preview}")" || return
+  [[ "$(printf '%s' "${applied}" | json_value 'data["mode"]')" == "applied" ]] || \
+    fail "project Skill apply did not report applied mode"
+  [[ -f "${test_project}/.agents/skills/write-release-notes/SKILL.md" ]] || \
+    fail "project Skill was not created"
+  HARNESS_SKILLS_DIR="${test_project}/.agents/skills" \
+    bash "${ROOT_DIR}/scripts/harness/validate-skills.sh" >/dev/null || \
+    fail "learn created an invalid project Skill"
+  [[ ! -e "${test_project}/.agents/vibe-engineering/learning.json" ]] || \
+    fail "learn persisted a hidden evidence ledger"
+  ! grep -R -Fq 'release-17' "${test_project}/.agents" || \
+    fail "learn persisted raw occurrence evidence"
+}
+
+test_learn_rejects_duplicate_occurrences_and_stale_or_conflicting_skill() {
+  new_project
+  local setup_preview evidence_file preview token before after conflict
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/skill-safety-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "project-skill",
+    "pattern_id": "incident-handoff",
+    "occurrences": [{"id": "incident-7"}, {"id": "incident-7"}],
+    "explicit_standard": false,
+    "skill_name": "incident-handoff",
+    "trigger": "Use when handing an active incident to another operator",
+    "guidance": [
+      "Include the latest confirmed symptom and its observation timestamp.",
+      "List attempted mitigations with their observed outcome and owner."
+    ]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  if preview_learn "${test_project}" "${evidence_file}" >/dev/null 2>&1; then
+    fail "duplicate occurrence ids were accepted"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected duplicate evidence changed the target"
+
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["occurrences"] = [{"id": "incident-7"}]
+data["explicit_standard"] = True
+path.write_text(json.dumps(data))
+PY
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["guidance"][1] = "List attempted mitigations and name the next decision owner explicitly."
+path.write_text(json.dumps(data))
+PY
+  if python3 "${CLI}" learn --target "${test_project}" --evidence-file "${evidence_file}" \
+    --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "apply accepted evidence changed after preview"
+    return
+  fi
+  [[ ! -e "${test_project}/.agents/skills/incident-handoff" ]] || \
+    fail "stale learn apply wrote a project Skill"
+
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  mkdir -p "${test_project}/.agents/skills/incident-handoff"
+  printf '%s\n' 'project-owned content' > "${test_project}/.agents/skills/incident-handoff/SKILL.md"
+  conflict="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  [[ "$(printf '%s' "${conflict}" | json_value 'data["operation"]["action"]')" == "conflict" ]] || \
+    fail "existing same-name project Skill was not a reviewable conflict"
+  [[ "$(printf '%s' "${conflict}" | json_value '"plan_token" in data')" == "False" ]] || \
+    fail "conflicting project Skill returned an apply token"
+}
+
+test_learn_binds_destination_state_and_rolls_back_partial_skill() {
+  new_project
+  local setup_preview evidence_file preview token before after rollback_preview rollback_token
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/skill-binding-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "project-skill",
+    "pattern_id": "deploy-handoff",
+    "occurrences": [{"id": "deploy-21"}],
+    "explicit_standard": true,
+    "skill_name": "deploy-handoff",
+    "trigger": "Use when handing a production deployment to another operator",
+    "guidance": [
+      "Record the deployed revision and the environment that received it.",
+      "List remaining checks with their owner and expected completion time."
+    ]
+  }'
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  mkdir -p "${test_project}/.agents/skills/deploy-handoff"
+  printf '%s\n' 'project-owned content' > \
+    "${test_project}/.agents/skills/deploy-handoff/SKILL.md"
+  if python3 "${CLI}" learn --target "${test_project}" --evidence-file "${evidence_file}" \
+    --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "learn token was accepted after destination state changed"
+    return
+  fi
+  [[ "$(cat "${test_project}/.agents/skills/deploy-handoff/SKILL.md")" == "project-owned content" ]] || \
+    fail "stale learn apply replaced project-owned content"
+
+  rm -rf -- "${test_project}/.agents/skills/deploy-handoff"
+  rollback_preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  rollback_token="$(printf '%s' "${rollback_preview}" | json_value 'data["plan_token"]')" || return
+  before="$(snapshot_tree "${test_project}")" || return
+  if VIBE_ENGINEERING_TEST_FAIL_AFTER_WRITES=1 python3 "${CLI}" learn \
+    --target "${test_project}" --evidence-file "${evidence_file}" \
+    --apply --plan-token "${rollback_token}" >/dev/null 2>&1; then
+    fail "induced learn write failure unexpectedly succeeded"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "learn write failure did not restore the target"
+}
+
+test_learn_rejects_unsafe_destination_and_secret_evidence() {
+  new_project
+  local setup_preview evidence_file outside before after output
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/unsafe-learn-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "machine-checkable",
+    "pattern_id": "verify-cache",
+    "occurrences": [{"id": "review-22"}],
+    "explicit_standard": false,
+    "check_surface": "tests",
+    "guidance": ["Reject generated cache files from the committed project tree."]
+  }'
+  outside="${TEST_TEMP_ROOT}/outside-${TESTS_RUN}"
+  mkdir -p "${outside}"
+  mkdir -p "${test_project}/.agents/vibe-engineering/proposals"
+  ln -s "${outside}" "${test_project}/.agents/vibe-engineering/proposals/checks"
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "learn accepted a symbolic-link destination"
+    return
+  fi
+  [[ "${output}" == *"symbolic link"* ]] || fail "unsafe learn path error was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected learn destination changed the target"
+
+  rm "${test_project}/.agents/vibe-engineering/proposals/checks"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "repository-guidance",
+    "pattern_id": "credential-note",
+    "occurrences": [{"id": "review-23"}],
+    "explicit_standard": false,
+    "guidance": ["Use api_key=super-secret-value for the integration check."]
+  }'
+  if preview_learn "${test_project}" "${evidence_file}" >/dev/null 2>&1; then
+    fail "learn accepted evidence containing an apparent secret"
+  fi
+  ! grep -R -Fq 'super-secret-value' "${test_project}/.agents" || \
+    fail "learn persisted a secret from rejected evidence"
+}
+
+test_learn_routes_machine_checks_to_reviewable_proposals() {
+  new_project
+  local setup_preview evidence_file preview applied proposal
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/machine-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "machine-checkable",
+    "pattern_id": "generated-files-ignored",
+    "occurrences": [{"id": "review-41"}],
+    "explicit_standard": false,
+    "check_surface": "harness-checks",
+    "guidance": ["Fail verification when generated cache files are tracked under build/cache."]
+  }'
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "propose-machine-check" ]] || \
+    fail "machine-checkable evidence was not routed to a check proposal"
+  [[ "$(printf '%s' "${preview}" | json_value 'data["operation"]["path"]')" == ".agents/vibe-engineering/proposals/checks/generated-files-ignored.md" ]] || \
+    fail "machine-check proposal destination was not bounded"
+  [[ ! -e "${test_project}/.agents/vibe-engineering/proposals" ]] || \
+    fail "machine-check preview wrote a proposal"
+  applied="$(apply_learn_preview "${test_project}" "${evidence_file}" "${preview}")" || return
+  proposal="${test_project}/.agents/vibe-engineering/proposals/checks/generated-files-ignored.md"
+  [[ -f "${proposal}" ]] || fail "machine-check proposal was not written"
+  grep -Fq 'Target surface: `harness-checks`' "${proposal}" || \
+    fail "machine-check proposal omitted its selected check surface"
+  grep -Fq 'generated cache files' "${proposal}" || \
+    fail "machine-check proposal omitted the required behavior"
+  [[ ! -e "${test_project}/.agents/vibe-engineering/proposals/checks/generated-files-ignored.py" ]] || \
+    fail "learn fabricated executable check code"
+}
+
+test_learn_routes_repository_guidance_inside_managed_block() {
+  new_project
+  printf '%s\n' '# User instructions' 'Preserve this line.' > "${test_project}/AGENTS.md"
+  local setup_preview evidence_file preview status_output upgrade_preview
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/guidance-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "repository-guidance",
+    "pattern_id": "schema-docs",
+    "occurrences": [{"id": "review-52"}],
+    "explicit_standard": false,
+    "guidance": ["Update docs/schema.md whenever a persisted schema field changes."]
+  }'
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "propose-repository-guidance" ]] || \
+    fail "repository lesson was not routed to managed guidance"
+  [[ "$(printf '%s' "${preview}" | json_value 'data["operation"]["path"]')" == "AGENTS.md" ]] || \
+    fail "repository guidance targeted an unexpected file"
+  apply_learn_preview "${test_project}" "${evidence_file}" "${preview}" >/dev/null || return
+  grep -Fq 'Preserve this line.' "${test_project}/AGENTS.md" || \
+    fail "repository guidance replaced user-owned AGENTS content"
+  python3 - "${test_project}/AGENTS.md" <<'PY' || return
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+start = text.index("<!-- vibe-engineering:start -->")
+learned_start = text.index("<!-- vibe-engineering:learned:start -->")
+guidance = text.index("Update docs/schema.md whenever a persisted schema field changes.")
+learned_end = text.index("<!-- vibe-engineering:learned:end -->")
+end = text.index("<!-- vibe-engineering:end -->")
+assert start < learned_start < guidance < learned_end < end
+PY
+  status_output="$(python3 "${CLI}" status --target "${test_project}")" || return
+  [[ "$(printf '%s' "${status_output}" | json_value 'data["status"]')" == "current" ]] || \
+    fail "learned repository guidance left the manifest modified"
+  upgrade_preview="$(preview_upgrade "${CLI}" "${test_project}")" || return
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == "AGENTS.md")')" == "unchanged" ]] || \
+    fail "upgrade did not preserve learned repository guidance"
+}
+
+test_learn_does_not_replace_modified_managed_guidance() {
+  new_project
+  local setup_preview evidence_file before after output
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  python3 - "${test_project}/AGENTS.md" <<'PY' || return
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace(
+    "Keep reusable project workflows in `.agents/skills/`.",
+    "Keep locally customized project workflows in `.agents/skills/`.",
+))
+PY
+  evidence_file="${TEST_TEMP_ROOT}/modified-guidance-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "repository-guidance",
+    "pattern_id": "schema-docs",
+    "occurrences": [{"id": "review-61"}],
+    "explicit_standard": false,
+    "guidance": ["Update docs/schema.md whenever a persisted schema field changes."]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "learn accepted locally modified managed guidance"
+    return
+  fi
+  [[ "${output}" == *"locally modified"* ]] || \
+    fail "modified managed guidance refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected guidance learning changed the target"
+}
+
 run_test "Skill package is valid" test_skill_package_is_valid
 run_test "setup preview is read-only" test_setup_preview_is_read_only
 run_test "copied Skill subtree is self-contained" test_copied_skill_subtree_is_self_contained
@@ -603,6 +1044,16 @@ run_test "upgrade reports missing, wrong-type, and unsafe paths" test_upgrade_re
 run_test "upgrade write failure rolls back the complete target" test_upgrade_write_failure_rolls_back_complete_target
 run_test "upgrade tokens and resolutions are exactly bound" test_upgrade_token_and_resolutions_are_exactly_bound
 run_test "upgrade preserves AGENTS outside its managed block" test_upgrade_preserves_agents_outside_block_and_conflicts_inside_block
+run_test "learn keeps one-off choices outside durable files" test_learn_keeps_one_off_choices_outside_durable_files
+run_test "learn rejects boolean evidence schema versions" test_learn_rejects_boolean_evidence_schema_without_writes
+run_test "learn rejects forged and inconsistent manifests" test_learn_rejects_forged_or_inconsistent_manifests_without_writes
+run_test "learn project Skill requires distinct evidence and preview" test_learn_project_skill_requires_distinct_evidence_and_preview
+run_test "learn rejects duplicate, stale, and conflicting Skill evidence" test_learn_rejects_duplicate_occurrences_and_stale_or_conflicting_skill
+run_test "learn binds destinations and rolls back partial Skill writes" test_learn_binds_destination_state_and_rolls_back_partial_skill
+run_test "learn rejects unsafe destinations and secret evidence" test_learn_rejects_unsafe_destination_and_secret_evidence
+run_test "learn routes machine checks to reviewable proposals" test_learn_routes_machine_checks_to_reviewable_proposals
+run_test "learn routes repository guidance inside the managed block" test_learn_routes_repository_guidance_inside_managed_block
+run_test "learn preserves locally modified managed guidance" test_learn_does_not_replace_modified_managed_guidance
 
 echo "${TESTS_RUN} vibe-engineering tests, ${TESTS_FAILED} failures"
 [[ ${TESTS_FAILED} -eq 0 ]]
