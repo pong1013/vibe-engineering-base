@@ -20,7 +20,16 @@ make verify
 
 Skill checks use lightweight shell validation. They verify directory and Skill names, required frontmatter fields, unfinished placeholders, required `agents/openai.yaml` interface fields, default prompts, and the shape of optional invocation policies. They do not fully parse or validate arbitrary YAML.
 
-Project Contract checks require `.agents/project-contract.md`, its five standard sections in order, and each known field inside its owning section. They validate typed verification status, safe repository-relative paths, the `yes` preservation and Delivery Gate invariants, and an allowed delivery mode. Work-artifact locations may be a repository path, `unconfigured`, or `configured by` an existing repository-relative configuration file; the last form lets the Contract point to an authoritative tracker setup without copying it. Checks reject misplaced or unknown fields, missing or unsafe references, nonsensical commands, and a contract that claims complete verification while the default project checks declare themselves unconfigured.
+Project Contract checks require `.agents/project-contract.md`, its five standard sections in order, and each known field inside its owning section. The default `repository` profile validates repository instructions, ticket backend, branch-aware workspace preservation, and remote/target delivery fields. The explicit `folder` profile validates project instructions, task tracking, workspace preservation, and a destination without introducing repository-only fields. Both profiles validate typed verification status, safe relative paths, the `yes` preservation and Delivery Gate invariants, and an allowed delivery mode. Work-artifact locations may be a project path, `unconfigured`, or `configured by` an existing relative configuration file. Bootstrap Contracts may truthfully leave bootstrap verification, complete verification, and project checks `unconfigured`. Checks reject misplaced or unknown fields, missing or unsafe references, nonsensical commands, and a contract that claims complete verification while the default project checks declare themselves unconfigured.
+
+Select the folder schema explicitly when validating a plain project folder:
+
+```bash
+HARNESS_CONTRACT_PROFILE=folder \
+  HARNESS_PROJECT_CONTRACT=/absolute/project/.agents/project-contract.md \
+  HARNESS_CONTRACT_ROOT=/absolute/project \
+  bash scripts/harness/validate-project-contract.sh
+```
 
 ## Verification states
 
@@ -96,6 +105,7 @@ These environment variables support regression tests and controlled diagnostics:
 | `HARNESS_SKILLS_DIR` | Validate a different active Skills directory. |
 | `HARNESS_PROJECT_CONTRACT` | Validate a different Project Contract file. |
 | `HARNESS_CONTRACT_ROOT` | Resolve a diagnostic contract against another repository root. |
+| `HARNESS_CONTRACT_PROFILE` | Select the strict `repository` profile (default) or the strict `folder` profile. |
 | `HARNESS_SKIP_TESTS=1` | Skip Harness regression tests inside `verify.sh`. |
 | `HARNESS_PROJECT_CHECKS` | Run a different project checks script. An override is treated as configured. |
 | `HARNESS_CODEX_BIN` | Select the Codex executable used by the audit. |

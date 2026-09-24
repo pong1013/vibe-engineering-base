@@ -20,7 +20,16 @@ make verify
 
 Skill checks 使用輕量的 shell 驗證。它會檢查目錄與 Skill 名稱、必要的 frontmatter 欄位、未完成的 placeholder、`agents/openai.yaml` 必要介面欄位、default prompt，以及選用 invocation policy 的格式。它不會完整解析或驗證任意 YAML。
 
-Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。它也會驗證具型別的驗證狀態、安全的 repository-relative paths、固定為 `yes` 的保留與 Delivery Gate 不變條件，以及合法的 delivery mode。Work artifacts 的位置可設為 repository path、`unconfigured`，或以 `configured by` 指向已存在的 repository-relative 設定檔；最後一種形式可引用權威 tracker 設定而不複製內容。欄位放錯位置、未知欄位、缺失或不安全的引用、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
+Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。預設的 `repository` profile 會驗證 repository instructions、ticket backend、包含 branch 的 workspace preservation，以及 remote/target delivery 欄位。明確指定的 `folder` profile 會驗證 project instructions、task tracking、workspace preservation 與 destination，不會要求只適用於 repository 的欄位。兩種 profile 都會驗證具型別的驗證狀態、安全的相對路徑、固定為 `yes` 的 preservation 與 Delivery Gate 不變條件，以及合法的 delivery mode。Work artifacts 的位置可設為專案路徑、`unconfigured`，或以 `configured by` 指向已存在的相對設定檔。Bootstrap Contract 可以如實將 bootstrap verification、complete verification 與 project checks 保持為 `unconfigured`。欄位放錯位置、未知欄位、缺失或不安全的引用、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
+
+驗證一般專案資料夾時，請明確選擇 folder schema：
+
+```bash
+HARNESS_CONTRACT_PROFILE=folder \
+  HARNESS_PROJECT_CONTRACT=/absolute/project/.agents/project-contract.md \
+  HARNESS_CONTRACT_ROOT=/absolute/project \
+  bash scripts/harness/validate-project-contract.sh
+```
 
 ## 驗證狀態
 
@@ -96,6 +105,7 @@ Source repository 使用 `PROJECT_CHECKS_CONFIGURED=1` 驗證自己的 repositor
 | `HARNESS_SKILLS_DIR` | 改為驗證另一個啟用中的 Skills 目錄。 |
 | `HARNESS_PROJECT_CONTRACT` | 改為驗證另一個 Project Contract 檔案。 |
 | `HARNESS_CONTRACT_ROOT` | 讓診斷用 Contract 以另一個 repository root 解析。 |
+| `HARNESS_CONTRACT_PROFILE` | 選擇嚴格的 `repository` profile（預設）或嚴格的 `folder` profile。 |
 | `HARNESS_SKIP_TESTS=1` | 在 `verify.sh` 內略過 Harness 回歸測試。 |
 | `HARNESS_PROJECT_CHECKS` | 改為執行另一個 project checks script。指定的 script 會視為已設定。 |
 | `HARNESS_CODEX_BIN` | 指定 audit 使用的 Codex executable。 |

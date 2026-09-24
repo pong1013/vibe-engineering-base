@@ -575,25 +575,51 @@ def desired_files(
 def state_for_plan(target: Path, paths: list[Path]) -> dict[str, dict[str, str]]:
     observed = {}
     for relative in sorted(set(paths + [MANIFEST_PATH]), key=str):
-        ensure_safe_write_path(target, relative)
+        ensure_safe_write_path(target, relative, allow_wrong_type=True)
         observed[relative.as_posix()] = path_state(target / relative)
     return observed
 
 
-def build_plan(target: Path, capabilities: tuple[str, ...]) -> tuple[dict[str, Any], dict[Path, bytes]]:
+def build_plan(
+    target: Path, capabilities: tuple[str, ...], resolutions: tuple[str, ...]
+) -> tuple[dict[str, Any], dict[Path, bytes]]:
     project_type = detect_project_type(target)
     desired, entries = desired_files(target, capabilities, project_type)
     observed = state_for_plan(target, list(desired))
-    operations = []
+    if len(resolutions) != len(set(resolutions)):
+        raise UserError("duplicate conflict resolution path")
+    requested = tuple(sorted(resolutions))
+    for raw in requested:
+        candidate = Path(raw)
+        if candidate.is_absolute() or ".." in candidate.parts or candidate == Path("."):
+            raise UserError(f"unsafe conflict resolution path: {raw}")
+
+    operations: list[dict[str, Any]] = []
+    conflicts: set[str] = set()
     for relative, content in sorted(desired.items(), key=lambda item: str(item[0])):
         state = observed[relative.as_posix()]
-        if state.get("sha256") == digest(content):
-            action = "unchanged"
-        elif state["kind"] == "missing":
-            action = "create"
+        item: dict[str, Any] = {"path": relative.as_posix()}
+        if state["kind"] == "missing":
+            item["action"] = "create"
+        elif state["kind"] != "file":
+            item.update(action="conflict", reason=f"wrong-type:{state['kind']}")
+            conflicts.add(relative.as_posix())
+        elif state.get("sha256") == digest(content):
+            item["action"] = "unchanged"
         else:
-            action = "update"
-        operations.append({"action": action, "path": relative.as_posix()})
+            current = (target / relative).read_bytes()
+            if relative == Path("AGENTS.md") and BLOCK_START not in current.decode("utf-8"):
+                item.update(action="update", diff=review_diff(relative, current, content))
+            else:
+                reason = "existing-managed-block" if relative == Path("AGENTS.md") else "existing-project-file"
+                item.update(
+                    action="conflict",
+                    reason=reason,
+                    diff=review_diff(relative, current, content),
+                )
+                conflicts.add(relative.as_posix())
+        operations.append(item)
+
     manifest = {
         "schema_version": 1,
         "source_version": SOURCE_VERSION,
@@ -601,18 +627,50 @@ def build_plan(target: Path, capabilities: tuple[str, ...]) -> tuple[dict[str, A
         "capabilities": list(capabilities),
         "managed": entries,
     }
+    manifest_content = json_bytes(manifest)
+    desired[MANIFEST_PATH] = manifest_content
+    manifest_state = observed[MANIFEST_PATH.as_posix()]
+    manifest_item: dict[str, Any] = {"path": MANIFEST_PATH.as_posix()}
+    if manifest_state["kind"] == "missing":
+        manifest_item["action"] = "create"
+    elif manifest_state["kind"] != "file":
+        manifest_item.update(action="conflict", reason=f"wrong-type:{manifest_state['kind']}")
+        conflicts.add(MANIFEST_PATH.as_posix())
+    elif manifest_state.get("sha256") == digest(manifest_content):
+        manifest_item["action"] = "unchanged"
+    else:
+        manifest_item.update(
+            action="conflict",
+            reason="existing-manifest",
+            diff=review_diff(
+                MANIFEST_PATH, (target / MANIFEST_PATH).read_bytes(), manifest_content
+            ),
+        )
+        conflicts.add(MANIFEST_PATH.as_posix())
+    operations.append(manifest_item)
+
+    unknown_resolutions = set(requested) - conflicts
+    if unknown_resolutions:
+        paths = ", ".join(sorted(unknown_resolutions))
+        raise UserError(f"conflict resolution does not match a current conflict: {paths}")
+    for item in operations:
+        if item["path"] in requested:
+            if item.get("reason", "").startswith("wrong-type:"):
+                raise UserError(f"wrong-type conflict cannot be replaced safely: {item['path']}")
+            item["resolution"] = "replace"
+
     token_input = {
         "target": str(target),
         "source_version": SOURCE_VERSION,
         "project_type": project_type,
         "capabilities": list(capabilities),
+        "resolutions": list(requested),
         "observed": observed,
         "desired": {
             relative.as_posix(): digest(content)
             for relative, content in sorted(desired.items(), key=lambda item: str(item[0]))
         },
     }
-    plan_token = digest(json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     plan = {
         "command": "setup",
         "mode": "preview",
@@ -621,9 +679,14 @@ def build_plan(target: Path, capabilities: tuple[str, ...]) -> tuple[dict[str, A
         "source_version": SOURCE_VERSION,
         "capabilities": list(capabilities),
         "operations": operations,
-        "plan_token": plan_token,
     }
-    desired[MANIFEST_PATH] = json_bytes(manifest)
+    manifest_unresolved = (
+        manifest_item["action"] == "conflict" and manifest_item.get("resolution") != "replace"
+    )
+    if not manifest_unresolved:
+        plan["plan_token"] = digest(
+            json.dumps(token_input, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
     return plan, desired
 
 
@@ -644,16 +707,27 @@ def atomic_write(path: Path, content: bytes) -> None:
 def setup(args: argparse.Namespace) -> dict[str, Any]:
     target = validate_target(args.target)
     capabilities = normalize_capabilities(args.capability)
-    plan, desired = build_plan(target, capabilities)
+    resolutions = tuple(args.resolve_conflict or ())
+    plan, desired = build_plan(target, capabilities, resolutions)
     if not args.apply:
         return plan
+    unresolved = [
+        item["path"]
+        for item in plan["operations"]
+        if item["action"] == "conflict" and item.get("resolution") != "replace"
+    ]
+    if unresolved:
+        raise UserError(f"setup has unresolved conflicts: {', '.join(unresolved)}")
     if not args.plan_token:
         raise UserError("--plan-token is required with --apply")
-    if args.plan_token != plan["plan_token"]:
+    if args.plan_token != plan.get("plan_token"):
         raise UserError("project state changed after preview; create a new setup preview")
-    for relative, content in sorted(desired.items(), key=lambda item: relative_sort_key(item[0])):
-        ensure_safe_write_path(target, relative)
-        atomic_write(target / relative, content)
+    writes = {
+        Path(item["path"]): desired[Path(item["path"])]
+        for item in plan["operations"]
+        if item["action"] in ("create", "update") or item.get("resolution") == "replace"
+    }
+    transactional_write(target, writes)
     plan["mode"] = "applied"
     return plan
 
@@ -972,14 +1046,10 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
     manifest = read_manifest(target)
     if manifest is None:
         return {"command": "status", "target": str(target), "status": "not-installed", "managed": []}
+    installed_version, _, _, entries = validate_installed_manifest(target, manifest)
     results = []
     states = set()
-    for entry in manifest["managed"]:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            raise UserError("manifest contains an invalid managed path")
-        relative = Path(entry["path"])
-        if relative.is_absolute() or ".." in relative.parts:
-            raise UserError("manifest contains an unsafe managed path")
+    for relative, entry in entries.items():
         ensure_safe_write_path(target, relative)
         file_state = path_state(target / relative)
         if file_state["kind"] == "missing":
@@ -995,7 +1065,7 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
             item_status = "current" if actual == entry.get("sha256") else "modified"
         states.add(item_status)
         results.append({"path": relative.as_posix(), "status": item_status})
-    version_changed = manifest.get("source_version") != SOURCE_VERSION
+    version_changed = installed_version != SOURCE_VERSION
     if version_changed:
         overall = "upgrade-available"
     elif "modified" in states:
@@ -1009,7 +1079,7 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
         "target": str(target),
         "status": overall,
         "source_version": SOURCE_VERSION,
-        "installed_version": manifest.get("source_version"),
+        "installed_version": installed_version,
         "managed": results,
     }
 
@@ -1020,6 +1090,7 @@ def parser() -> argparse.ArgumentParser:
     setup_parser = commands.add_parser("setup", help="preview or apply project Harness setup")
     setup_parser.add_argument("--target", required=True)
     setup_parser.add_argument("--capability", action="append", choices=sorted(KNOWN_CAPABILITIES))
+    setup_parser.add_argument("--resolve-conflict", action="append")
     setup_parser.add_argument("--apply", action="store_true")
     setup_parser.add_argument("--plan-token")
     setup_parser.set_defaults(handler=setup)

@@ -16,11 +16,11 @@ Use this Skill for a selected writable project folder. A chat without a writable
    python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" setup --target /absolute/project/path
    ```
 
-3. Show the target, selected capabilities, and file operations from the JSON preview. Obtain the user's approval immediately before applying the mutation unless that exact setup was already authorized.
-4. Apply only the previewed state with its `plan_token`:
+3. Show the target, selected capabilities, and file operations from the JSON preview. Existing project-owned managed paths appear as `conflict` with a text diff or binary checksums. Obtain an explicit replacement decision for each conflict and include its path as `--resolve-conflict PATH` when creating a new preview. A wrong-type or symbolic-link conflict cannot be resolved by replacement.
+4. Obtain the user's approval immediately before applying the mutation unless that exact setup was already authorized. Apply only the previewed state with its `plan_token` and the exact same `--resolve-conflict` arguments:
 
    ```bash
-   python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" setup --target /absolute/project/path --apply --plan-token TOKEN
+   python3 "${CODEX_HOME:-$HOME/.codex}/skills/vibe-engineering/scripts/project_manager.py" setup --target /absolute/project/path --resolve-conflict PATH --apply --plan-token TOKEN
    ```
 
 The default capabilities are `harness` and `harness-feedback`. Pass `--capability harness` or `--capability harness-feedback` repeatedly to select a subset. Setup owns only the bounded block it adds to `AGENTS.md`; preserve every other line.

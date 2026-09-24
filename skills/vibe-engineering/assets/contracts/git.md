@@ -5,14 +5,15 @@ This file is the workflow-facing index for this project. Follow `AGENTS.md` and 
 ## Verification
 
 - Status: bootstrap
-- Complete verification: discover and configure for this project
-- Project checks: discover and configure for this project
+- Bootstrap verification: unconfigured
+- Complete verification: unconfigured
+- Project checks: unconfigured
 
 ## Knowledge
 
-- Project instructions: `AGENTS.md`
-- Domain language: discover from project documentation
-- Architecture decisions: discover from project documentation
+- Repository instructions: `AGENTS.md`
+- Domain language: unconfigured
+- Architecture decisions: unconfigured
 
 ## Work artifacts
 

@@ -102,6 +102,42 @@ write_valid_project_contract() {
     > "${contract_file}"
 }
 
+write_valid_folder_project_contract() {
+  local contract_file="$1"
+  mkdir -p "$(dirname "${contract_file}")"
+  printf '%s\n' \
+    '# Project Contract' \
+    '' \
+    '## Verification' \
+    '' \
+    '- Status: bootstrap' \
+    '- Bootstrap verification: unconfigured' \
+    '- Complete verification: unconfigured' \
+    '- Project checks: unconfigured' \
+    '' \
+    '## Knowledge' \
+    '' \
+    '- Project instructions: `AGENTS.md`' \
+    '- Domain language: unconfigured' \
+    '- Architecture decisions: unconfigured' \
+    '' \
+    '## Work artifacts' \
+    '' \
+    '- Specifications: unconfigured' \
+    '- Task tracking: unconfigured' \
+    '' \
+    '## Workspace' \
+    '' \
+    '- Preserve unrelated workspace changes: yes' \
+    '' \
+    '## Delivery' \
+    '' \
+    '- Mode: unconfigured' \
+    '- Destination: unconfigured' \
+    '- Require Delivery Gate: yes' \
+    > "${contract_file}"
+}
+
 test_source_project_checks_pass() {
   local output
   if ! output="$(bash "${ROOT_DIR}/scripts/harness/project-checks.sh" 2>&1)"; then
@@ -136,6 +172,68 @@ test_valid_project_contract_passes() {
   HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
     HARNESS_CONTRACT_ROOT="${test_tmp}" \
     bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null
+}
+
+test_folder_project_contract_profile_passes() {
+  new_temp_dir
+  write_valid_folder_project_contract "${test_tmp}/project-contract.md"
+  HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    HARNESS_CONTRACT_PROFILE=folder \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null
+}
+
+test_contract_profiles_remain_strict() {
+  new_temp_dir
+  write_valid_folder_project_contract "${test_tmp}/project-contract.md"
+  if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+    fail "repository profile accepted a folder Contract"
+    return
+  fi
+  if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    HARNESS_CONTRACT_PROFILE=unknown \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+    fail "validator accepted an unknown Contract profile"
+  fi
+}
+
+test_folder_contract_rejects_version_control_delivery_modes() {
+  local mode
+  for mode in none unconfigured; do
+    new_temp_dir
+    write_valid_folder_project_contract "${test_tmp}/project-contract.md"
+    sed -i.bak "s/Mode: unconfigured/Mode: ${mode}/" "${test_tmp}/project-contract.md"
+    HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${test_tmp}" \
+      HARNESS_CONTRACT_PROFILE=folder \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+      fail "folder profile rejected delivery mode: ${mode}"
+  done
+  for mode in commit-only push pull-request merge-request; do
+    new_temp_dir
+    write_valid_folder_project_contract "${test_tmp}/project-contract.md"
+    sed -i.bak "s/Mode: unconfigured/Mode: ${mode}/" "${test_tmp}/project-contract.md"
+    if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${test_tmp}" \
+      HARNESS_CONTRACT_PROFILE=folder \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+      fail "folder profile accepted delivery mode: ${mode}"
+      return
+    fi
+  done
+  for mode in none commit-only push pull-request merge-request unconfigured; do
+    new_temp_dir
+    write_valid_project_contract "${test_tmp}/project-contract.md"
+    sed -i.bak "s/Mode: unconfigured/Mode: ${mode}/" "${test_tmp}/project-contract.md"
+    HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${test_tmp}" \
+      HARNESS_CONTRACT_PROFILE=repository \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+      fail "repository profile rejected delivery mode: ${mode}"
+  done
 }
 
 test_missing_project_contract_fails() {
@@ -608,6 +706,9 @@ run_test "invalid agent metadata fails" test_invalid_agent_metadata_fails
 run_test "valid invocation policy values pass" test_invocation_policy_values_pass
 run_test "invalid invocation policy fails" test_invalid_invocation_policy_fails
 run_test "valid Project Contract passes" test_valid_project_contract_passes
+run_test "folder Project Contract profile passes" test_folder_project_contract_profile_passes
+run_test "Project Contract profiles remain strict" test_contract_profiles_remain_strict
+run_test "folder Contract rejects version-control delivery modes" test_folder_contract_rejects_version_control_delivery_modes
 run_test "missing Project Contract fails" test_missing_project_contract_fails
 run_test "incomplete Project Contract fails" test_incomplete_project_contract_fails
 run_test "duplicate Project Contract section fails" test_duplicate_project_contract_section_fails

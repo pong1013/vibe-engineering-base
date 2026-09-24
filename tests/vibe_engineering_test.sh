@@ -42,15 +42,18 @@ json_value() {
 }
 
 preview_setup() {
-  python3 "${CLI}" setup --target "$1"
+  local target="$1"
+  shift
+  python3 "${CLI}" setup --target "${target}" "$@"
 }
 
 apply_preview() {
   local target="$1"
   local preview="$2"
+  shift 2
   local token
   token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
-  python3 "${CLI}" setup --target "${target}" --apply --plan-token "${token}"
+  python3 "${CLI}" setup --target "${target}" "$@" --apply --plan-token "${token}"
 }
 
 preview_upgrade() {
@@ -99,7 +102,21 @@ new_upgrader() {
 
 snapshot_files() {
   local target="$1"
-  find "${target}" -type f -not -path '*/.git/*' -print0 | sort -z | xargs -0 shasum -a 256
+  python3 - "${target}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+snapshot = {}
+for path in root.rglob("*"):
+    relative = path.relative_to(root)
+    if ".git" in relative.parts or not path.is_file() or path.is_symlink():
+        continue
+    snapshot[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+PY
 }
 
 snapshot_tree() {
@@ -151,6 +168,8 @@ test_setup_preview_is_read_only() {
   token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
 
   [[ -n "${token}" ]] || fail "preview did not return a plan token"
+  [[ "$(printf '%s' "${preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/vibe-engineering/manifest.json")')" == "create" ]] || \
+    fail "initial setup did not preview the manifest creation"
   [[ ! -e "${test_project}/.agents" ]] || fail "preview wrote managed files"
   [[ "$(cat "${test_project}/AGENTS.md")" == '# Existing instructions' ]] || \
     fail "preview changed AGENTS.md"
@@ -226,6 +245,162 @@ PY
   apply_preview "${test_project}" "${second_preview}" >/dev/null || return
   after_repeat="$(snapshot_files "${test_project}")" || return
   [[ "${before_repeat}" == "${after_repeat}" ]] || fail "repeated setup changed managed files"
+}
+
+test_setup_conflicts_require_exact_replacement_decisions() {
+  new_project
+  local contract='.agents/project-contract.md'
+  local skill='.agents/skills/harness-feedback/SKILL.md'
+  local metadata='.agents/skills/harness-feedback/agents/openai.yaml'
+  local preview resolved token before after
+  mkdir -p "${test_project}/.agents/skills/harness-feedback/agents"
+  printf '%s\n' \
+    '# User instructions' \
+    '<!-- vibe-engineering:start -->' \
+    'project-owned managed guidance' \
+    '<!-- vibe-engineering:end -->' \
+    'Keep this suffix byte-for-byte.  ' > "${test_project}/AGENTS.md"
+  printf '%s\n' 'project-owned contract' > "${test_project}/${contract}"
+  printf '%s\n' 'project-owned skill' > "${test_project}/${skill}"
+  printf '\000\001project-owned metadata\377' > "${test_project}/${metadata}"
+
+  preview="$(preview_setup "${test_project}")" || return
+  for path in AGENTS.md "${contract}" "${skill}" "${metadata}"; do
+    [[ "$(printf '%s' "${preview}" | json_value "next(item[\"action\"] for item in data[\"operations\"] if item[\"path\"] == \"${path}\")")" == "conflict" ]] || \
+      fail "setup did not report conflict for ${path}"
+    [[ "$(printf '%s' "${preview}" | json_value "len(next(item[\"diff\"] for item in data[\"operations\"] if item[\"path\"] == \"${path}\")) > 0")" == "True" ]] || \
+      fail "setup conflict lacked reviewable diff for ${path}"
+  done
+  [[ "$(printf '%s' "${preview}" | json_value '"binary .agents/skills/harness-feedback/agents/openai.yaml" in next(item["diff"] for item in data["operations"] if item["path"] == ".agents/skills/harness-feedback/agents/openai.yaml")')" == "True" ]] || \
+    fail "binary conflict did not use checksum-safe review output"
+
+  before="$(snapshot_tree "${test_project}")" || return
+  if apply_preview "${test_project}" "${preview}" >/dev/null 2>&1; then
+    fail "setup applied unresolved project-owned conflicts"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected setup conflict changed the target"
+
+  resolved="$(preview_setup "${test_project}" \
+    --resolve-conflict AGENTS.md \
+    --resolve-conflict "${contract}" \
+    --resolve-conflict "${skill}" \
+    --resolve-conflict "${metadata}")" || return
+  [[ "$(printf '%s' "${resolved}" | json_value 'all(item.get("resolution") == "replace" for item in data["operations"] if item["action"] == "conflict")')" == "True" ]] || \
+    fail "setup replacement decisions were not present in preview"
+  token="$(printf '%s' "${resolved}" | json_value 'data["plan_token"]')" || return
+  if python3 "${CLI}" setup --target "${test_project}" \
+    --resolve-conflict AGENTS.md --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "setup token accepted a different replacement set"
+    return
+  fi
+  apply_preview "${test_project}" "${resolved}" \
+    --resolve-conflict AGENTS.md \
+    --resolve-conflict "${contract}" \
+    --resolve-conflict "${skill}" \
+    --resolve-conflict "${metadata}" >/dev/null || return
+  grep -Fq 'Keep this suffix byte-for-byte.  ' "${test_project}/AGENTS.md" || \
+    fail "resolved managed block changed user-owned AGENTS bytes"
+  ! grep -Fq 'project-owned managed guidance' "${test_project}/AGENTS.md" || \
+    fail "resolved managed block did not install packaged guidance"
+}
+
+test_setup_wrong_type_conflict_cannot_be_resolved() {
+  new_project
+  mkdir -p "${test_project}/.agents/project-contract.md"
+  local preview
+  preview="$(preview_setup "${test_project}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'next(item["reason"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "wrong-type:directory" ]] || \
+    fail "setup did not report the wrong-type conflict"
+  if preview_setup "${test_project}" --resolve-conflict .agents/project-contract.md >/dev/null 2>&1; then
+    fail "setup allowed replacement of a wrong-type conflict"
+  fi
+}
+
+test_setup_manifest_conflict_requires_exact_replacement() {
+  new_project
+  local manifest='.agents/vibe-engineering/manifest.json'
+  local preview resolved stale_snapshot after_stale token fresh
+  mkdir -p "${test_project}/.agents/vibe-engineering"
+  printf '%s\n' '{"project_owned": true}' > "${test_project}/${manifest}"
+
+  preview="$(preview_setup "${test_project}")" || return
+  [[ "$(printf '%s' "${preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/vibe-engineering/manifest.json")')" == "conflict" ]] || \
+    fail "setup did not report the existing manifest conflict"
+  [[ "$(printf '%s' "${preview}" | json_value '"project_owned" in next(item["diff"] for item in data["operations"] if item["path"] == ".agents/vibe-engineering/manifest.json")')" == "True" ]] || \
+    fail "manifest conflict lacked a reviewable diff"
+  [[ "$(printf '%s' "${preview}" | json_value '"plan_token" not in data')" == "True" ]] || \
+    fail "unresolved manifest conflict exposed an apply token"
+  stale_snapshot="$(snapshot_tree "${test_project}")" || return
+  if python3 "${CLI}" setup --target "${test_project}" --apply --plan-token bogus >/dev/null 2>&1; then
+    fail "setup applied an unresolved manifest conflict"
+    return
+  fi
+  after_stale="$(snapshot_tree "${test_project}")" || return
+  [[ "${stale_snapshot}" == "${after_stale}" ]] || fail "rejected manifest conflict changed the target"
+
+  resolved="$(preview_setup "${test_project}" --resolve-conflict "${manifest}")" || return
+  [[ "$(printf '%s' "${resolved}" | json_value 'next(item["resolution"] for item in data["operations"] if item["path"] == ".agents/vibe-engineering/manifest.json")')" == "replace" ]] || \
+    fail "manifest replacement was not shown in the resolved preview"
+  token="$(printf '%s' "${resolved}" | json_value 'data["plan_token"]')" || return
+  printf '%s\n' '{"changed_after_preview": true}' > "${test_project}/${manifest}"
+  stale_snapshot="$(snapshot_tree "${test_project}")" || return
+  if python3 "${CLI}" setup --target "${test_project}" --resolve-conflict "${manifest}" \
+    --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "stale manifest replacement token was accepted"
+    return
+  fi
+  after_stale="$(snapshot_tree "${test_project}")" || return
+  [[ "${stale_snapshot}" == "${after_stale}" ]] || fail "stale manifest apply changed other paths"
+
+  fresh="$(preview_setup "${test_project}" --resolve-conflict "${manifest}")" || return
+  apply_preview "${test_project}" "${fresh}" --resolve-conflict "${manifest}" >/dev/null || return
+  [[ "$(json_value 'data["schema_version"]' < "${test_project}/${manifest}")" == "1" ]] || \
+    fail "resolved setup did not install the managed manifest"
+}
+
+test_setup_write_failure_restores_complete_tree() {
+  new_project
+  local preview token before after
+  printf '%s\n' '# Existing bytes' > "${test_project}/AGENTS.md"
+  preview="$(preview_setup "${test_project}")" || return
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  before="$(snapshot_tree "${test_project}")" || return
+  if VIBE_ENGINEERING_TEST_FAIL_AFTER_WRITES=2 python3 "${CLI}" setup \
+    --target "${test_project}" --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "induced setup write failure unexpectedly succeeded"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "setup failure left changed files or artifacts"
+}
+
+test_setup_contracts_pass_their_validator_profiles() {
+  local git_project folder_project git_preview folder_preview
+  git_project="${TEST_TEMP_ROOT}/git-contract-${TESTS_RUN}"
+  folder_project="${TEST_TEMP_ROOT}/folder-contract-${TESTS_RUN}"
+  mkdir -p "${git_project}" "${folder_project}"
+  git -C "${git_project}" init -q
+  git_preview="$(preview_setup "${git_project}")" || return
+  apply_preview "${git_project}" "${git_preview}" >/dev/null || return
+  folder_preview="$(preview_setup "${folder_project}")" || return
+  apply_preview "${folder_project}" "${folder_preview}" >/dev/null || return
+
+  HARNESS_PROJECT_CONTRACT="${git_project}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${git_project}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "packaged repository Contract failed repository validation"
+  HARNESS_PROJECT_CONTRACT="${folder_project}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${folder_project}" \
+    HARNESS_CONTRACT_PROFILE=folder \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "packaged folder Contract failed folder validation"
+  grep -Fqx -- '- Complete verification: unconfigured' \
+    "${git_project}/.agents/project-contract.md" || fail "repository bootstrap Contract was not truthful"
+  grep -Fqx -- '- Complete verification: unconfigured' \
+    "${folder_project}/.agents/project-contract.md" || fail "folder bootstrap Contract was not truthful"
 }
 
 test_folder_setup_omits_repository_concepts() {
@@ -424,6 +599,30 @@ PY
   [[ "$(printf '%s' "${upgraded_status}" | json_value 'data["status"]')" == "upgrade-available" ]] || \
     fail "status did not report an available upgrade"
   [[ "${before_status}" == "${after_status}" ]] || fail "status wrote to the project"
+}
+
+test_status_rejects_incomplete_manifest_without_writing() {
+  new_project
+  local preview manifest before after output
+  preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${preview}" >/dev/null || return
+  manifest="${test_project}/.agents/vibe-engineering/manifest.json"
+  python3 - "${manifest}" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text())
+value["managed"] = value["managed"][:-1]
+path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(python3 "${CLI}" status --target "${test_project}" 2>&1)"; then
+    fail "status accepted an incomplete manifest"
+    return
+  fi
+  [[ "${output}" == *"managed paths do not match capabilities"* ]] || \
+    fail "status did not explain the invalid manifest"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected status changed the target"
 }
 
 test_upgrade_updates_clean_files_and_preserves_project_owned_skills() {
@@ -1027,6 +1226,11 @@ run_test "Skill package is valid" test_skill_package_is_valid
 run_test "setup preview is read-only" test_setup_preview_is_read_only
 run_test "copied Skill subtree is self-contained" test_copied_skill_subtree_is_self_contained
 run_test "setup applies a manifest and is idempotent" test_setup_applies_manifest_and_is_idempotent
+run_test "setup conflicts require exact replacement decisions" test_setup_conflicts_require_exact_replacement_decisions
+run_test "setup wrong-type conflicts cannot be resolved" test_setup_wrong_type_conflict_cannot_be_resolved
+run_test "setup manifest conflicts require exact replacement" test_setup_manifest_conflict_requires_exact_replacement
+run_test "setup failure restores the complete target" test_setup_write_failure_restores_complete_tree
+run_test "setup Contracts pass their validator profiles" test_setup_contracts_pass_their_validator_profiles
 run_test "folder setup omits repository concepts" test_folder_setup_omits_repository_concepts
 run_test "apply rejects a stale plan" test_apply_rejects_stale_plan
 run_test "plan token cannot cross targets or replay" test_plan_token_cannot_cross_targets_or_replay
@@ -1038,6 +1242,7 @@ run_test "failed validation leaves no partial setup" test_apply_validation_failu
 run_test "malformed managed markers fail closed" test_malformed_managed_markers_fail_closed
 run_test "capability selection is recorded" test_capability_selection_is_recorded
 run_test "status reports states without writing" test_status_reports_states_without_writing
+run_test "status rejects incomplete manifests without writing" test_status_rejects_incomplete_manifest_without_writing
 run_test "upgrade updates clean files and preserves project-owned Skills" test_upgrade_updates_clean_files_and_preserves_project_owned_skills
 run_test "upgrade conflicts require explicit bounded resolution" test_upgrade_conflict_requires_explicit_bounded_resolution
 run_test "upgrade reports missing, wrong-type, and unsafe paths" test_upgrade_reports_missing_wrong_type_and_unsafe_paths

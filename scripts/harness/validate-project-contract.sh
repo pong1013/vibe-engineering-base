@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONTRACT_FILE="${HARNESS_PROJECT_CONTRACT:-${ROOT_DIR}/.agents/project-contract.md}"
 CONTRACT_ROOT="${HARNESS_CONTRACT_ROOT:-${ROOT_DIR}}"
 PROJECT_CHECKS_FILE="${HARNESS_PROJECT_CHECKS:-${CONTRACT_ROOT}/scripts/harness/project-checks.sh}"
+CONTRACT_PROFILE="${HARNESS_CONTRACT_PROFILE:-repository}"
 expected_sections=(
   "Verification"
   "Knowledge"
@@ -18,6 +19,11 @@ die() {
   echo "Project Contract error: $* (${CONTRACT_FILE})" >&2
   exit 1
 }
+
+case "${CONTRACT_PROFILE}" in
+  repository|folder) ;;
+  *) die "HARNESS_CONTRACT_PROFILE must be 'repository' or 'folder'" ;;
+esac
 
 field_value() {
   local section="$1"
@@ -139,10 +145,17 @@ section_count="$(grep -Ec '^## ' "${CONTRACT_FILE}" || true)"
 grep -Fq '[TODO:' "${CONTRACT_FILE}" && die "contains an unfinished placeholder"
 
 validate_section_fields "Verification" "Status|Bootstrap verification|Complete verification|Project checks"
-validate_section_fields "Knowledge" "Repository instructions|Domain language|Architecture decisions"
-validate_section_fields "Work artifacts" "Specifications|Ticket backend"
-validate_section_fields "Workspace" "Default branch|Feature branch naming|Preserve unrelated working-tree changes"
-validate_section_fields "Delivery" "Mode|Remote and target branch|Require Delivery Gate"
+if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
+  validate_section_fields "Knowledge" "Repository instructions|Domain language|Architecture decisions"
+  validate_section_fields "Work artifacts" "Specifications|Ticket backend"
+  validate_section_fields "Workspace" "Default branch|Feature branch naming|Preserve unrelated working-tree changes"
+  validate_section_fields "Delivery" "Mode|Remote and target branch|Require Delivery Gate"
+else
+  validate_section_fields "Knowledge" "Project instructions|Domain language|Architecture decisions"
+  validate_section_fields "Work artifacts" "Specifications|Task tracking"
+  validate_section_fields "Workspace" "Preserve unrelated workspace changes"
+  validate_section_fields "Delivery" "Mode|Destination|Require Delivery Gate"
+fi
 
 verification_status="$(field_value "Verification" "Status")"
 complete_verification="$(field_value "Verification" "Complete verification")"
@@ -151,7 +164,9 @@ case "${verification_status}" in
     [[ "${complete_verification}" == "unconfigured" ]] || \
       die "bootstrap status requires Complete verification: unconfigured"
     bootstrap_verification="$(field_value "Verification" "Bootstrap verification")"
-    validate_command "Bootstrap verification" "${bootstrap_verification}"
+    if [[ "${bootstrap_verification}" != "unconfigured" ]]; then
+      validate_command "Bootstrap verification" "${bootstrap_verification}"
+    fi
     ;;
   complete)
     validate_command "Complete verification" "${complete_verification}"
@@ -163,42 +178,70 @@ case "${verification_status}" in
   *) die "Status must be 'bootstrap' or 'complete'" ;;
 esac
 
-validate_relative_path "Knowledge" "Repository instructions"
+if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
+  validate_relative_path "Knowledge" "Repository instructions"
+else
+  validate_relative_path "Knowledge" "Project instructions"
+fi
 validate_relative_path "Knowledge" "Domain language"
 validate_relative_path "Knowledge" "Architecture decisions"
 specifications="$(field_value "Work artifacts" "Specifications")"
 validate_artifact_location "Specifications" "${specifications}"
 validate_relative_path "Verification" "Project checks"
 
-ticket_backend="$(field_value "Work artifacts" "Ticket backend")"
-if [[ "${ticket_backend}" == "configured by \`"*"\`" ]]; then
-  validate_configuration_reference "Ticket backend configuration reference" "${ticket_backend#configured by }"
+if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
+  tracking_label="Ticket backend"
 else
-  [[ "${ticket_backend}" == "unconfigured" || "${ticket_backend}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || \
-    die "Ticket backend must be 'unconfigured', a lowercase backend identifier, or 'configured by' one repository-relative path"
+  tracking_label="Task tracking"
+fi
+tracking_value="$(field_value "Work artifacts" "${tracking_label}")"
+if [[ "${tracking_value}" == "configured by \`"*"\`" ]]; then
+  validate_configuration_reference "${tracking_label} configuration reference" "${tracking_value#configured by }"
+else
+  [[ "${tracking_value}" == "unconfigured" || "${tracking_value}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || \
+    die "${tracking_label} must be 'unconfigured', a lowercase backend identifier, or 'configured by' one repository-relative path"
 fi
 
-[[ "$(field_value "Workspace" "Preserve unrelated working-tree changes")" == "yes" ]] || \
-  die "Preserve unrelated working-tree changes must be 'yes'"
+if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
+  [[ "$(field_value "Workspace" "Preserve unrelated working-tree changes")" == "yes" ]] || \
+    die "Preserve unrelated working-tree changes must be 'yes'"
 
-default_branch="$(field_value "Workspace" "Default branch")"
-if [[ "${default_branch}" != "discover from the repository" ]]; then
-  [[ "${default_branch}" =~ ^\`[A-Za-z0-9._/-]+\`$ && "${default_branch}" != *..* ]] || \
-    die "Default branch must be discoverable or one backtick-wrapped safe branch name"
+  default_branch="$(field_value "Workspace" "Default branch")"
+  if [[ "${default_branch}" != "discover from the repository" ]]; then
+    [[ "${default_branch}" =~ ^\`[A-Za-z0-9._/-]+\`$ && "${default_branch}" != *..* ]] || \
+      die "Default branch must be discoverable or one backtick-wrapped safe branch name"
+  fi
+else
+  [[ "$(field_value "Workspace" "Preserve unrelated workspace changes")" == "yes" ]] || \
+    die "Preserve unrelated workspace changes must be 'yes'"
 fi
 
 delivery_mode="$(field_value "Delivery" "Mode")"
-case "${delivery_mode}" in
-  none|commit-only|push|pull-request|merge-request|unconfigured) ;;
-  *) die "Mode must be none, commit-only, push, pull-request, merge-request, or unconfigured" ;;
-esac
+if [[ "${CONTRACT_PROFILE}" == "folder" ]]; then
+  case "${delivery_mode}" in
+    none|unconfigured) ;;
+    *) die "folder profile Mode must be none or unconfigured" ;;
+  esac
+else
+  case "${delivery_mode}" in
+    none|commit-only|push|pull-request|merge-request|unconfigured) ;;
+    *) die "Mode must be none, commit-only, push, pull-request, merge-request, or unconfigured" ;;
+  esac
+fi
 [[ "$(field_value "Delivery" "Require Delivery Gate")" == "yes" ]] || \
   die "Require Delivery Gate must be 'yes'"
 
-remote_target="$(field_value "Delivery" "Remote and target branch")"
-if [[ "${remote_target}" != "discover and confirm before delivery" && "${remote_target}" != "unconfigured" ]]; then
-  [[ "${remote_target}" =~ ^\`[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\`$ && "${remote_target}" != *..* ]] || \
-    die "Remote and target branch must be unconfigured, discoverable, or a backtick-wrapped remote/branch pair"
+if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
+  remote_target="$(field_value "Delivery" "Remote and target branch")"
+  if [[ "${remote_target}" != "discover and confirm before delivery" && "${remote_target}" != "unconfigured" ]]; then
+    [[ "${remote_target}" =~ ^\`[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\`$ && "${remote_target}" != *..* ]] || \
+      die "Remote and target branch must be unconfigured, discoverable, or a backtick-wrapped remote/branch pair"
+  fi
+else
+  destination="$(field_value "Delivery" "Destination")"
+  if [[ "${destination}" != "discover and confirm before delivery" && "${destination}" != "unconfigured" ]]; then
+    validate_relative_path "Delivery" "Destination"
+  fi
 fi
 
 echo "Validated Project Contract (${verification_status}): ${CONTRACT_FILE}"
