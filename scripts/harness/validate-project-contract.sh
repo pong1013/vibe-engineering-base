@@ -93,9 +93,19 @@ validate_configuration_reference() {
   local label="$1"
   local value="$2"
   local path
+  local current
+  local part
+  local parts
   validate_repo_path_value "${label}" "${value}"
   path="${value#\`}"
   path="${path%\`}"
+  current="${CONTRACT_ROOT}"
+  [[ ! -L "${current}" ]] || die "${label} must not use a symbolic link: ${path}"
+  IFS='/' read -r -a parts <<< "${path}"
+  for part in "${parts[@]}"; do
+    current="${current}/${part}"
+    [[ ! -L "${current}" ]] || die "${label} must not use a symbolic link: ${path}"
+  done
   [[ -f "${CONTRACT_ROOT}/${path}" ]] || die "${label} file not found: ${path}"
 }
 
@@ -118,12 +128,42 @@ validate_command() {
   [[ "${value}" =~ ^\`[^\`]+\`$ ]] || die "${label} must be one backtick-wrapped command"
   value="${value#\`}"
   value="${value%\`}"
-  first_token="${value%% *}"
+  IFS=$' \t' read -r first_token _ <<< "${value}"
   case "${first_token}" in
     true|false|:|yes|no) die "${label} is not an executable verification entrypoint" ;;
   esac
   [[ "${value}" =~ ^[A-Za-z0-9./:+_-]+([[:space:]][A-Za-z0-9./:=,@%+_-]+)*$ ]] || \
     die "${label} must be a direct command without shell control operators"
+}
+
+is_valid_git_branch_name() {
+  local branch="$1"
+  local component
+  local components
+  [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+  [[ "${branch}" != "HEAD" ]] || return 1
+  [[ "${branch}" != /* && "${branch}" != */ && "${branch}" != -* ]] || return 1
+  [[ "${branch}" != *..* && "${branch}" != *//* ]] || return 1
+  IFS='/' read -r -a components <<< "${branch}"
+  for component in "${components[@]}"; do
+    [[ -n "${component}" && "${component}" != .* && "${component}" != *. && \
+       "${component}" != *.lock ]] || return 1
+  done
+}
+
+is_valid_feature_branch_pattern() {
+  local pattern="$1"
+  local without_first
+  [[ "${pattern}" =~ ^[A-Za-z0-9._/*-]+$ ]] || return 1
+  without_first="${pattern/\*/}"
+  [[ "${without_first}" != *\** ]] || return 1
+  is_valid_git_branch_name "${pattern//\*/x}"
+}
+
+is_valid_remote_name() {
+  local remote="$1"
+  [[ "${remote}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  [[ "${remote}" != *..* && "${remote}" != *. && "${remote}" != *.lock ]]
 }
 
 [[ -f "${CONTRACT_FILE}" ]] || die "file not found"
@@ -208,8 +248,23 @@ if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
 
   default_branch="$(field_value "Workspace" "Default branch")"
   if [[ "${default_branch}" != "discover from the repository" ]]; then
-    [[ "${default_branch}" =~ ^\`[A-Za-z0-9._/-]+\`$ && "${default_branch}" != *..* ]] || \
+    [[ "${default_branch}" =~ ^\`[^\`]+\`$ ]] || \
       die "Default branch must be discoverable or one backtick-wrapped safe branch name"
+    branch_value="${default_branch#\`}"
+    branch_value="${branch_value%\`}"
+    is_valid_git_branch_name "${branch_value}" || \
+      die "Default branch must be discoverable or one backtick-wrapped safe branch name"
+  fi
+
+  feature_branch_naming="$(field_value "Workspace" "Feature branch naming")"
+  if [[ "${feature_branch_naming}" != "follow an explicit repository policy; otherwise propose a safe name" && \
+        "${feature_branch_naming}" != "unconfigured" ]]; then
+    [[ "${feature_branch_naming}" =~ ^\`[^\`]+\`$ ]] || \
+      die "Feature branch naming must be the discovery policy, unconfigured, or one backtick-wrapped safe pattern"
+    branch_value="${feature_branch_naming#\`}"
+    branch_value="${branch_value%\`}"
+    is_valid_feature_branch_pattern "${branch_value}" || \
+      die "Feature branch naming must be the discovery policy, unconfigured, or one backtick-wrapped safe pattern"
   fi
 else
   [[ "$(field_value "Workspace" "Preserve unrelated workspace changes")" == "yes" ]] || \
@@ -234,7 +289,14 @@ fi
 if [[ "${CONTRACT_PROFILE}" == "repository" ]]; then
   remote_target="$(field_value "Delivery" "Remote and target branch")"
   if [[ "${remote_target}" != "discover and confirm before delivery" && "${remote_target}" != "unconfigured" ]]; then
-    [[ "${remote_target}" =~ ^\`[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\`$ && "${remote_target}" != *..* ]] || \
+    [[ "${remote_target}" =~ ^\`[^\`]+\`$ ]] || \
+      die "Remote and target branch must be unconfigured, discoverable, or a backtick-wrapped remote/branch pair"
+    remote_target_value="${remote_target#\`}"
+    remote_target_value="${remote_target_value%\`}"
+    remote_name="${remote_target_value%%/*}"
+    branch_value="${remote_target_value#*/}"
+    [[ "${remote_target_value}" == */* ]] && is_valid_remote_name "${remote_name}" && \
+      is_valid_git_branch_name "${branch_value}" || \
       die "Remote and target branch must be unconfigured, discoverable, or a backtick-wrapped remote/branch pair"
   fi
 else

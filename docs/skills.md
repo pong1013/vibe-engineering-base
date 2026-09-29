@@ -24,11 +24,15 @@ The installed Skill is available on the next turn. It accepts a current or expli
 | setup | Previews and then installs selected Harness capabilities in a Git repository or plain folder. |
 | status | Reports managed paths as current, modified, or missing without writing. |
 | upgrade | Previews version changes; modified managed files remain conflicts until the user reviews a replacement decision. |
-| learn | Routes concrete evidence to guidance, check proposals, or a project Skill when its reuse threshold is met. |
+| learn | Routes concrete evidence to managed guidance, Project Contract facts, check proposals, or a project Skill when its reuse threshold is met. |
 
 Setup and upgrade bind approval to the target and current file state with a plan token. Writes are atomic. The manifest at `.agents/vibe-engineering/manifest.json` records the source version, selected capabilities, managed paths, and checksums without storing secrets.
 
+During upgrade, a manifest-clean Project Contract keeps its allowlisted project values while adopting new template structure, prose, and newly introduced fields. A locally modified Contract stays a reviewable conflict.
+
 The Skill owns only its bounded block in `AGENTS.md`. Existing project content and project-created Skills remain project-owned. A plain folder receives no Git, CI, branch, commit, or pull request assumptions.
+
+Learn previews every file it will write. Use the explicit `workflow-fact` category with destination `project-contract` to update one existing, profile-compatible Contract field. `Specifications` and the profile's tracker field accept `configured by` only with an existing safe relative configuration file. The preview includes both the Contract diff and manifest checksum update, and apply fails if either file changed after preview.
 
 ## Repository Skill discovery
 

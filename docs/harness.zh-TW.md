@@ -20,7 +20,7 @@ make verify
 
 Skill checks 使用輕量的 shell 驗證。它會檢查目錄與 Skill 名稱、必要的 frontmatter 欄位、未完成的 placeholder、`agents/openai.yaml` 必要介面欄位、default prompt，以及選用 invocation policy 的格式。它不會完整解析或驗證任意 YAML。
 
-Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。預設的 `repository` profile 會驗證 repository instructions、ticket backend、包含 branch 的 workspace preservation，以及 remote/target delivery 欄位。明確指定的 `folder` profile 會驗證 project instructions、task tracking、workspace preservation 與 destination，不會要求只適用於 repository 的欄位。兩種 profile 都會驗證具型別的驗證狀態、安全的相對路徑、固定為 `yes` 的 preservation 與 Delivery Gate 不變條件，以及合法的 delivery mode。Work artifacts 的位置可設為專案路徑、`unconfigured`，或以 `configured by` 指向已存在的相對設定檔。Bootstrap Contract 可以如實將 bootstrap verification、complete verification 與 project checks 保持為 `unconfigured`。欄位放錯位置、未知欄位、缺失或不安全的引用、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
+Project Contract checks 會要求 `.agents/project-contract.md`、依序排列的五個標準區塊，而且每個已知欄位必須位於所屬區塊。預設的 `repository` profile 會驗證 repository instructions、ticket backend、必要的 default 與 feature branch policy、workspace preservation，以及 remote/target delivery 欄位。明確指定的 `folder` profile 會驗證 project instructions、task tracking、workspace preservation 與 destination，不會要求只適用於 repository 的欄位。兩種 profile 都會驗證具型別的驗證狀態、安全的相對路徑、固定為 `yes` 的 preservation 與 Delivery Gate 不變條件，以及合法的 delivery mode。Work artifacts 的位置可設為專案路徑、`unconfigured`，或以 `configured by` 指向已存在的相對設定檔。Bootstrap Contract 可以如實將 bootstrap verification、complete verification 與 project checks 保持為 `unconfigured`。欄位放錯位置、未知欄位、缺失或不安全的引用、無意義命令，或 default project checks 明確未設定但 Contract 宣稱完整驗證，都會被拒絕。
 
 驗證一般專案資料夾時，請明確選擇 folder schema：
 

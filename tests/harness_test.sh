@@ -92,6 +92,7 @@ write_valid_project_contract() {
     '## Workspace' \
     '' \
     '- Default branch: discover from the repository' \
+    '- Feature branch naming: follow an explicit repository policy; otherwise propose a safe name' \
     '- Preserve unrelated working-tree changes: yes' \
     '' \
     '## Delivery' \
@@ -172,6 +173,18 @@ test_valid_project_contract_passes() {
   HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
     HARNESS_CONTRACT_ROOT="${test_tmp}" \
     bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null
+}
+
+test_repository_contract_requires_feature_branch_naming() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  sed -i.bak '/^- Feature branch naming: /d' "${test_tmp}/project-contract.md"
+  if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+    fail "repository profile accepted a Contract without Feature branch naming"
+  fi
 }
 
 test_folder_project_contract_profile_passes() {
@@ -311,6 +324,90 @@ test_nonsensical_verification_command_fails() {
   assert_invalid_project_contract "not an executable verification entrypoint"
 }
 
+test_nonsensical_verification_command_with_tabs_fails() {
+  local command
+  for command in true false : yes no; do
+    new_temp_dir
+    write_valid_project_contract "${test_tmp}/project-contract.md"
+    python3 - "${test_tmp}/project-contract.md" "${command}" <<'PY' || return
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("`make verify`", f"`{sys.argv[2]}\tignored`", 1)
+path.write_text(text)
+PY
+    if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${test_tmp}" \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+      fail "validator accepted tab-separated no-op command: ${command}"
+      return
+    fi
+  done
+}
+
+test_repository_branch_fields_reject_git_invalid_values() {
+  local field value
+  while IFS='|' read -r field value; do
+    new_temp_dir
+    write_valid_project_contract "${test_tmp}/project-contract.md"
+    python3 - "${test_tmp}/project-contract.md" "${field}" "${value}" <<'PY' || return
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+prefix = f"- {sys.argv[2]}: "
+lines = [prefix + sys.argv[3] if line.startswith(prefix) else line for line in text.splitlines()]
+path.write_text("\n".join(lines) + "\n")
+PY
+    if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${test_tmp}" \
+      HARNESS_CONTRACT_PROFILE=repository \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+      fail "validator accepted Git-invalid ${field}: ${value}"
+      return
+    fi
+  done <<'EOF'
+Default branch|`/main`
+Default branch|`main/`
+Default branch|`main//topic`
+Default branch|`.hidden`
+Default branch|`release.lock`
+Default branch|`HEAD`
+Feature branch naming|`/feature/*`
+Feature branch naming|`feature//*`
+Feature branch naming|`.feature/*`
+Feature branch naming|`feature/*/*`
+Feature branch naming|`HEAD`
+Remote and target branch|`origin//main`
+Remote and target branch|`origin/.hidden`
+Remote and target branch|`origin/release.lock`
+Remote and target branch|`origin/HEAD`
+EOF
+}
+
+test_repository_branch_fields_accept_lowercase_head() {
+  new_temp_dir
+  write_valid_project_contract "${test_tmp}/project-contract.md"
+  python3 - "${test_tmp}/project-contract.md" <<'PY' || return
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("- Default branch: discover from the repository", "- Default branch: `head`")
+text = text.replace(
+    "- Feature branch naming: follow an explicit repository policy; otherwise propose a safe name",
+    "- Feature branch naming: `head`",
+)
+text = text.replace(
+    "- Remote and target branch: discover and confirm before delivery",
+    "- Remote and target branch: `origin/head`",
+)
+path.write_text(text)
+PY
+  HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_tmp}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "repository validator rejected lowercase head branch values"
+}
+
 test_unsafe_contract_path_fails() {
   new_temp_dir
   write_valid_project_contract "${test_tmp}/project-contract.md"
@@ -366,6 +463,40 @@ test_malformed_tracker_configuration_reference_fails() {
     's#Ticket backend: unconfigured#Ticket backend: configured by docs/agents/issue-tracker.md#' \
     "${test_tmp}/project-contract.md"
   assert_invalid_project_contract "Ticket backend must be"
+}
+
+test_configuration_references_reject_symlinks() {
+  local profile link_kind
+  for profile in repository folder; do
+    for link_kind in final ancestor; do
+      test_tmp="${TEST_TEMP_ROOT}/case-${TESTS_RUN}-${profile}-${link_kind}"
+      mkdir -p "${test_tmp}"
+      if [[ "${profile}" == "repository" ]]; then
+        write_valid_project_contract "${test_tmp}/project-contract.md"
+      else
+        write_valid_folder_project_contract "${test_tmp}/project-contract.md"
+      fi
+      mkdir -p "${test_tmp}/real"
+      : > "${test_tmp}/real/config.md"
+      if [[ "${link_kind}" == "final" ]]; then
+        ln -s "${test_tmp}/real/config.md" "${test_tmp}/config-link.md"
+        reference='config-link.md'
+      else
+        ln -s "${test_tmp}/real" "${test_tmp}/config-link"
+        reference='config-link/config.md'
+      fi
+      sed -i.bak \
+        "s#^- Specifications: .*#- Specifications: configured by \`${reference}\`#" \
+        "${test_tmp}/project-contract.md"
+      if HARNESS_PROJECT_CONTRACT="${test_tmp}/project-contract.md" \
+        HARNESS_CONTRACT_ROOT="${test_tmp}" \
+        HARNESS_CONTRACT_PROFILE="${profile}" \
+        bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null 2>&1; then
+        fail "${profile} profile accepted a configured-by ${link_kind} symlink"
+        return
+      fi
+    done
+  done
 }
 
 test_verification_configuration_conflict_fails() {
@@ -706,6 +837,7 @@ run_test "invalid agent metadata fails" test_invalid_agent_metadata_fails
 run_test "valid invocation policy values pass" test_invocation_policy_values_pass
 run_test "invalid invocation policy fails" test_invalid_invocation_policy_fails
 run_test "valid Project Contract passes" test_valid_project_contract_passes
+run_test "repository Contract requires feature branch naming" test_repository_contract_requires_feature_branch_naming
 run_test "folder Project Contract profile passes" test_folder_project_contract_profile_passes
 run_test "Project Contract profiles remain strict" test_contract_profiles_remain_strict
 run_test "folder Contract rejects version-control delivery modes" test_folder_contract_rejects_version_control_delivery_modes
@@ -716,12 +848,16 @@ run_test "Project Contract placeholder fails" test_project_contract_placeholder_
 run_test "invalid delivery mode fails" test_invalid_delivery_mode_fails
 run_test "unsafe workspace policy fails" test_unsafe_workspace_policy_fails
 run_test "nonsensical verification command fails" test_nonsensical_verification_command_fails
+run_test "tab-separated no-op verification commands fail" test_nonsensical_verification_command_with_tabs_fails
+run_test "repository branch fields reject Git-invalid values" test_repository_branch_fields_reject_git_invalid_values
+run_test "repository branch fields accept lowercase head" test_repository_branch_fields_accept_lowercase_head
 run_test "unsafe contract path fails" test_unsafe_contract_path_fails
 run_test "tracker configuration references pass" test_tracker_configuration_reference_passes
 run_test "missing tracker configuration reference fails" test_missing_tracker_configuration_reference_fails
 run_test "missing ticket backend configuration reference fails" test_missing_ticket_backend_configuration_reference_fails
 run_test "unsafe tracker configuration reference fails" test_unsafe_tracker_configuration_reference_fails
 run_test "malformed tracker configuration reference fails" test_malformed_tracker_configuration_reference_fails
+run_test "configuration references reject symlinks" test_configuration_references_reject_symlinks
 run_test "verification configuration conflict fails" test_verification_configuration_conflict_fails
 run_test "bootstrap Project Contract passes" test_bootstrap_contract_passes
 run_test "misplaced Project Contract field fails" test_misplaced_contract_field_fails

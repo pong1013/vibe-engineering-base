@@ -154,6 +154,22 @@ print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
 PY
 }
 
+file_mode() {
+  python3 - "$1" <<'PY'
+import pathlib, stat, sys
+print(f"{stat.S_IMODE(pathlib.Path(sys.argv[1]).stat().st_mode):04o}")
+PY
+}
+
+expected_new_file_mode() {
+  python3 - <<'PY'
+import os
+mask = os.umask(0)
+os.umask(mask)
+print(f"{0o666 & ~mask:04o}")
+PY
+}
+
 test_skill_package_is_valid() {
   HARNESS_SKILLS_DIR="${ROOT_DIR}/skills" \
     bash "${ROOT_DIR}/scripts/harness/validate-skills.sh" >/dev/null
@@ -403,6 +419,106 @@ test_setup_contracts_pass_their_validator_profiles() {
     "${folder_project}/.agents/project-contract.md" || fail "folder bootstrap Contract was not truthful"
 }
 
+test_atomic_writes_preserve_or_assign_portable_modes() {
+  new_project
+  local expected setup_preview upgrade_preview evidence_file preview before after rollback_preview
+  expected="$(expected_new_file_mode)" || return
+  printf '%s\n' '# Existing instructions' > "${test_project}/AGENTS.md"
+  chmod 0640 "${test_project}/AGENTS.md"
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  [[ "$(file_mode "${test_project}/AGENTS.md")" == "0640" ]] || \
+    { fail "setup did not preserve the existing AGENTS mode"; return; }
+  local relative
+  for relative in \
+    .agents/project-contract.md \
+    .agents/skills/harness-feedback/SKILL.md \
+    .agents/skills/harness-feedback/agents/openai.yaml \
+    .agents/vibe-engineering/manifest.json; do
+    [[ "$(file_mode "${test_project}/${relative}")" == "${expected}" ]] || \
+      { fail "setup created ${relative} with a nonstandard mode"; return; }
+  done
+
+  chmod 0604 "${test_project}/.agents/project-contract.md"
+  new_upgrader
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${upgrade_preview}" >/dev/null || return
+  [[ "$(file_mode "${test_project}/.agents/project-contract.md")" == "0604" ]] || \
+    { fail "upgrade replacement did not preserve the Contract mode"; return; }
+
+  evidence_file="${TEST_TEMP_ROOT}/mode-contract-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "local-delivery-mode",
+    "occurrences": [{"id": "review-89"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Delivery",
+    "contract_field": "Mode",
+    "guidance": ["none"]
+  }'
+  preview="$(python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" --evidence-file "${evidence_file}")" || return
+  python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" \
+    --evidence-file "${evidence_file}" --apply \
+    --plan-token "$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" >/dev/null || return
+  [[ "$(file_mode "${test_project}/.agents/project-contract.md")" == "0604" ]] || \
+    { fail "Contract learning did not preserve the existing mode"; return; }
+
+  chmod 0640 "${test_project}/AGENTS.md"
+  evidence_file="${TEST_TEMP_ROOT}/mode-guidance-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "repository-guidance",
+    "pattern_id": "mode-guidance",
+    "occurrences": [{"id": "review-90"}],
+    "explicit_standard": true,
+    "guidance": ["Preserve executable file modes when replacing managed project files."]
+  }'
+  preview="$(python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" --evidence-file "${evidence_file}")" || return
+  python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" \
+    --evidence-file "${evidence_file}" --apply \
+    --plan-token "$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" >/dev/null || return
+  [[ "$(file_mode "${test_project}/AGENTS.md")" == "0640" ]] || \
+    { fail "guidance learning did not preserve the AGENTS mode"; return; }
+
+  evidence_file="${TEST_TEMP_ROOT}/mode-skill-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "project-skill",
+    "pattern_id": "mode-safe-release",
+    "occurrences": [{"id": "review-91"}],
+    "explicit_standard": true,
+    "skill_name": "mode-safe-release",
+    "trigger": "Use when preparing a release with generated managed files",
+    "guidance": [
+      "Inspect managed file permissions before preparing the release archive.",
+      "Preserve existing modes and apply the process umask to new text files."
+    ]
+  }'
+  preview="$(python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" --evidence-file "${evidence_file}")" || return
+  python3 "${upgrader_dir}/scripts/project_manager.py" learn --target "${test_project}" \
+    --evidence-file "${evidence_file}" --apply \
+    --plan-token "$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" >/dev/null || return
+  [[ "$(file_mode "${test_project}/.agents/skills/mode-safe-release/SKILL.md")" == "${expected}" ]] || \
+    { fail "learn created a project Skill with a nonstandard mode"; return; }
+  [[ "$(file_mode "${test_project}/.agents/skills/mode-safe-release/agents/openai.yaml")" == "${expected}" ]] || \
+    { fail "learn created project Skill metadata with a nonstandard mode"; return; }
+
+  printf '%s\n' '0.3.0' > "${upgrader_dir}/VERSION"
+  printf '%s\n' '<!-- another upgrade -->' >> "${upgrader_dir}/assets/contracts/folder.md"
+  rollback_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  before="$(snapshot_tree "${test_project}")" || return
+  if VIBE_ENGINEERING_TEST_FAIL_AFTER_WRITES=1 \
+    apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${rollback_preview}" >/dev/null 2>&1; then
+    fail "induced mode-preservation rollback unexpectedly succeeded"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || \
+    { fail "rollback did not restore file modes and content"; return; }
+}
+
 test_folder_setup_omits_repository_concepts() {
   new_project
   local preview applied output_file
@@ -601,6 +717,78 @@ PY
   [[ "${before_status}" == "${after_status}" ]] || fail "status wrote to the project"
 }
 
+test_status_and_upgrade_handle_wrong_type_or_binary_agents_without_writes() {
+  local target setup_preview output before after outside upgrade_preview
+  target="${TEST_TEMP_ROOT}/wrong-type-status-${TESTS_RUN}"
+  mkdir -p "${target}"
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  rm "${target}/.agents/project-contract.md"
+  mkdir "${target}/.agents/project-contract.md"
+  before="$(snapshot_tree "${target}")" || return
+  output="$(python3 "${CLI}" status --target "${target}" 2>&1)" || return
+  [[ "${output}" != *Traceback* ]] || fail "wrong-type status emitted a traceback"
+  [[ "$(printf '%s' "${output}" | json_value 'next(item["status"] for item in data["managed"] if item["path"] == ".agents/project-contract.md")')" == "modified" ]] || \
+    fail "status did not report a managed directory as modified"
+  after="$(snapshot_tree "${target}")" || return
+  [[ "${before}" == "${after}" ]] || fail "wrong-type status changed the target"
+
+  rm -rf "${target}/.agents/project-contract.md"
+  outside="${TEST_TEMP_ROOT}/status-symlink-${TESTS_RUN}.md"
+  : > "${outside}"
+  ln -s "${outside}" "${target}/.agents/project-contract.md"
+  before="$(snapshot_tree "${target}")" || return
+  if output="$(python3 "${CLI}" status --target "${target}" 2>&1)"; then
+    fail "status accepted a managed symlink"
+    return
+  fi
+  [[ "${output}" == *"symbolic link"* && "${output}" != *Traceback* ]] || \
+    fail "managed symlink status refusal was unclear"
+  after="$(snapshot_tree "${target}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected symlink status changed the target"
+
+  target="${TEST_TEMP_ROOT}/status-symlink-ancestor-${TESTS_RUN}"
+  outside="${TEST_TEMP_ROOT}/status-symlink-ancestor-data-${TESTS_RUN}"
+  mkdir -p "${target}"
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  mv "${target}/.agents" "${outside}"
+  ln -s "${outside}" "${target}/.agents"
+  before="$(snapshot_tree "${target}")" || return
+  if output="$(python3 "${CLI}" status --target "${target}" 2>&1)"; then
+    fail "status accepted a managed symlink ancestor"
+    return
+  fi
+  [[ "${output}" == *"symbolic link"* && "${output}" != *Traceback* ]] || \
+    fail "managed symlink ancestor status refusal was unclear"
+  after="$(snapshot_tree "${target}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected symlink ancestor status changed the target"
+
+  target="${TEST_TEMP_ROOT}/binary-agents-${TESTS_RUN}"
+  mkdir -p "${target}"
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  printf '\377\376invalid agents\000' > "${target}/AGENTS.md"
+  before="$(snapshot_tree "${target}")" || return
+  output="$(python3 "${CLI}" status --target "${target}" 2>&1)" || return
+  [[ "${output}" != *Traceback* ]] || fail "binary AGENTS status emitted a traceback"
+  [[ "$(printf '%s' "${output}" | json_value 'next(item["status"] for item in data["managed"] if item["path"] == "AGENTS.md")')" == "modified" ]] || \
+    fail "binary AGENTS was not reported as modified"
+  after="$(snapshot_tree "${target}")" || return
+  [[ "${before}" == "${after}" ]] || fail "binary AGENTS status changed the target"
+
+  new_upgrader
+  before="$(snapshot_tree "${target}")" || return
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${target}" 2>&1)" || return
+  [[ "${upgrade_preview}" != *Traceback* ]] || fail "binary AGENTS upgrade emitted a traceback"
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == "AGENTS.md")')" == "conflict" ]] || \
+    fail "binary AGENTS was not an upgrade conflict"
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["diff"] for item in data["operations"] if item["path"] == "AGENTS.md").startswith("binary AGENTS.md:")')" == "True" ]] || \
+    fail "binary AGENTS conflict lacked checksum review output"
+  after="$(snapshot_tree "${target}")" || return
+  [[ "${before}" == "${after}" ]] || fail "binary AGENTS upgrade preview changed the target"
+}
+
 test_status_rejects_incomplete_manifest_without_writing() {
   new_project
   local preview manifest before after output
@@ -625,6 +813,38 @@ PY
   [[ "${before}" == "${after}" ]] || fail "rejected status changed the target"
 }
 
+test_status_rejects_unknown_manifest_fields_without_writing() {
+  new_project
+  local preview manifest valid_manifest mode before after output
+  preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${preview}" >/dev/null || return
+  manifest="${test_project}/.agents/vibe-engineering/manifest.json"
+  valid_manifest="$(cat "${manifest}")"
+
+  for mode in top-level managed-entry; do
+    printf '%s' "${valid_manifest}" > "${manifest}"
+    python3 - "${manifest}" "${mode}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+if sys.argv[2] == "top-level":
+    data["future_behavior"] = "silently trusted"
+else:
+    data["managed"][0]["owner"] = "forged"
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
+    before="$(snapshot_tree "${test_project}")" || return
+    if output="$(python3 "${CLI}" status --target "${test_project}" 2>&1)"; then
+      fail "status accepted unknown manifest fields: ${mode}"
+      return
+    fi
+    [[ "${output}" == *"unsupported"* ]] || \
+      fail "status did not explain unknown manifest fields: ${mode}"
+    after="$(snapshot_tree "${test_project}")" || return
+    [[ "${before}" == "${after}" ]] || fail "rejected manifest fields changed the target: ${mode}"
+  done
+}
+
 test_upgrade_updates_clean_files_and_preserves_project_owned_skills() {
   new_project
   local setup_preview upgrade_preview applied custom_before custom_after
@@ -640,6 +860,8 @@ test_upgrade_updates_clean_files_and_preserves_project_owned_skills() {
     fail "clean changed managed file was not previewed as replacement"
   [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/skills/harness-feedback/SKILL.md")')" == "unchanged" ]] || \
     fail "unchanged managed file was not reported"
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/vibe-engineering/manifest.json")')" == "replacement" ]] || \
+    fail "upgrade did not preview its manifest replacement"
   applied="$(apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${upgrade_preview}")" || return
   [[ "$(printf '%s' "${applied}" | json_value 'data["mode"]')" == "applied" ]] || \
     fail "upgrade did not report applied mode"
@@ -658,6 +880,55 @@ test_upgrade_updates_clean_files_and_preserves_project_owned_skills() {
   apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${repeat_preview}" >/dev/null || return
   after_repeat="$(snapshot_files "${test_project}")" || return
   [[ "${before_repeat}" == "${after_repeat}" ]] || fail "current-version upgrade changed the project"
+}
+
+test_upgrade_preserves_learned_project_contract_facts() {
+  new_project
+  local setup_preview evidence_file learn_preview upgrade_preview conflict_preview status_output token before after
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/upgrade-learned-contract-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "local-delivery",
+    "occurrences": [{"id": "review-86"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Delivery",
+    "contract_field": "Mode",
+    "guidance": ["none"]
+  }'
+  learn_preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  apply_learn_preview "${test_project}" "${evidence_file}" "${learn_preview}" >/dev/null || return
+  new_upgrader
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${upgrade_preview}" | json_value 'set(item["path"] for item in data["operations"] if item["action"] == "replacement") == {".agents/project-contract.md", ".agents/vibe-engineering/manifest.json"}')" == "True" ]] || \
+    fail "upgrade preview did not list the exact Contract and manifest writes"
+  token="$(printf '%s' "${upgrade_preview}" | json_value 'data["plan_token"]')" || return
+  printf '%s\n' '# local change after preview' >> "${test_project}/.agents/project-contract.md"
+  before="$(snapshot_tree "${test_project}")" || return
+  if python3 "${upgrader_dir}/scripts/project_manager.py" upgrade --target "${test_project}" \
+    --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "merged Contract upgrade accepted stale state"
+    return
+  fi
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "stale merged Contract upgrade changed the target"
+  conflict_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  [[ "$(printf '%s' "${conflict_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == ".agents/project-contract.md")')" == "conflict" ]] || \
+    fail "locally modified learned Contract was auto-merged"
+  sed -i.bak '$d' "${test_project}/.agents/project-contract.md"
+  rm -f "${test_project}/.agents/project-contract.md.bak"
+  upgrade_preview="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}")" || return
+  apply_upgrade_preview "${upgrader_dir}/scripts/project_manager.py" "${test_project}" "${upgrade_preview}" >/dev/null || return
+  grep -Fqx -- '- Mode: none' "${test_project}/.agents/project-contract.md" || \
+    fail "clean upgrade replaced a learned Project Contract value"
+  grep -Fq '<!-- upgraded contract -->' "${test_project}/.agents/project-contract.md" || \
+    fail "clean upgrade did not adopt the new Contract template content"
+  status_output="$(python3 "${upgrader_dir}/scripts/project_manager.py" status --target "${test_project}")" || return
+  [[ "$(printf '%s' "${status_output}" | json_value 'data["status"]')" == "current" ]] || \
+    fail "merged Project Contract did not remain current after upgrade"
 }
 
 test_upgrade_conflict_requires_explicit_bounded_resolution() {
@@ -946,6 +1217,8 @@ PY
     fail "two distinct occurrences did not propose a project Skill"
   [[ "$(printf '%s' "${preview}" | json_value 'data["operation"]["path"]')" == ".agents/skills/write-release-notes/SKILL.md" ]] || \
     fail "project Skill destination was incorrect"
+  [[ "$(printf '%s' "${preview}" | json_value 'set(item["path"] for item in data["operations"]) == {".agents/skills/write-release-notes/SKILL.md", ".agents/skills/write-release-notes/agents/openai.yaml"}')" == "True" ]] || \
+    fail "project Skill preview did not show every file it would create"
   [[ ! -e "${test_project}/.agents/skills/write-release-notes" ]] || \
     fail "project Skill preview wrote files"
   applied="$(apply_learn_preview "${test_project}" "${evidence_file}" "${preview}")" || return
@@ -1167,6 +1440,8 @@ test_learn_routes_repository_guidance_inside_managed_block() {
     fail "repository lesson was not routed to managed guidance"
   [[ "$(printf '%s' "${preview}" | json_value 'data["operation"]["path"]')" == "AGENTS.md" ]] || \
     fail "repository guidance targeted an unexpected file"
+  [[ "$(printf '%s' "${preview}" | json_value 'set(item["path"] for item in data["operations"]) == {"AGENTS.md", ".agents/vibe-engineering/manifest.json"}')" == "True" ]] || \
+    fail "repository guidance preview omitted its manifest mutation"
   apply_learn_preview "${test_project}" "${evidence_file}" "${preview}" >/dev/null || return
   grep -Fq 'Preserve this line.' "${test_project}/AGENTS.md" || \
     fail "repository guidance replaced user-owned AGENTS content"
@@ -1186,6 +1461,420 @@ PY
   upgrade_preview="$(preview_upgrade "${CLI}" "${test_project}")" || return
   [[ "$(printf '%s' "${upgrade_preview}" | json_value 'next(item["action"] for item in data["operations"] if item["path"] == "AGENTS.md")')" == "unchanged" ]] || \
     fail "upgrade did not preserve learned repository guidance"
+}
+
+test_learn_routes_workflow_facts_to_project_contract() {
+  new_project
+  local setup_preview evidence_file preview token before after manifest
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/workflow-fact-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "local-artifact-delivery",
+    "occurrences": [{"id": "review-81"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Delivery",
+    "contract_field": "Mode",
+    "guidance": ["none"]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "workflow fact preview changed the project"
+  [[ "$(printf '%s' "${preview}" | json_value 'data["decision"]')" == "propose-project-contract" ]] || \
+    fail "workflow fact was not routed to the Project Contract"
+  [[ "$(printf '%s' "${preview}" | json_value 'set(item["path"] for item in data["operations"]) == {".agents/project-contract.md", ".agents/vibe-engineering/manifest.json"}')" == "True" ]] || \
+    fail "Project Contract proposal did not preview every mutation"
+  token="$(printf '%s' "${preview}" | json_value 'data["plan_token"]')" || return
+  printf '%s\n' '# local edit after preview' >> "${test_project}/.agents/project-contract.md"
+  if python3 "${CLI}" learn --target "${test_project}" --evidence-file "${evidence_file}" \
+    --apply --plan-token "${token}" >/dev/null 2>&1; then
+    fail "stale Project Contract learn token was accepted"
+    return
+  fi
+  sed -i.bak '$d' "${test_project}/.agents/project-contract.md"
+  rm -f "${test_project}/.agents/project-contract.md.bak"
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  apply_learn_preview "${test_project}" "${evidence_file}" "${preview}" >/dev/null || return
+  grep -Fqx -- '- Mode: none' "${test_project}/.agents/project-contract.md" || \
+    fail "workflow fact did not update the selected Contract field"
+  HARNESS_PROJECT_CONTRACT="${test_project}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${test_project}" \
+    HARNESS_CONTRACT_PROFILE=folder \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "workflow fact produced an invalid folder Contract"
+  manifest="${test_project}/.agents/vibe-engineering/manifest.json"
+  [[ "$(python3 "${CLI}" status --target "${test_project}" | json_value 'data["status"]')" == "current" ]] || \
+    fail "Project Contract learning did not update its manifest checksum"
+}
+
+test_learn_rejects_inapplicable_or_conflicting_contract_facts() {
+  new_project
+  local setup_preview evidence_file before after output
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/invalid-workflow-fact-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "repository-remote",
+    "occurrences": [{"id": "review-82"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Delivery",
+    "contract_field": "Remote and target branch",
+    "guidance": ["`origin/main`"]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "folder profile accepted a repository-only Contract fact"
+    return
+  fi
+  [[ "${output}" == *"not supported for this project profile"* ]] || \
+    fail "inapplicable Contract fact refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "rejected Contract fact changed the target"
+
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["contract_field"] = "Mode"
+data["guidance"] = ["none"]
+path.write_text(json.dumps(data))
+PY
+  printf '%s\n' '# project-owned edit' >> "${test_project}/.agents/project-contract.md"
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "learn replaced a locally modified Project Contract"
+    return
+  fi
+  [[ "${output}" == *"locally modified"* ]] || \
+    fail "modified Project Contract refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "Contract conflict changed the target"
+}
+
+test_learn_contract_configuration_references_match_validator() {
+  local profile target setup_preview evidence_file preview before after output field
+  for profile in repository folder; do
+    target="${TEST_TEMP_ROOT}/configured-reference-${profile}-${TESTS_RUN}"
+    mkdir -p "${target}/docs/agents"
+    printf '%s\n' '# Tracker configuration' > "${target}/docs/agents/tracker.md"
+    if [[ "${profile}" == "repository" ]]; then
+      git -C "${target}" init -q
+      field='Ticket backend'
+    else
+      field='Task tracking'
+    fi
+    setup_preview="$(preview_setup "${target}")" || return
+    apply_preview "${target}" "${setup_preview}" >/dev/null || return
+    evidence_file="${TEST_TEMP_ROOT}/configured-reference-${profile}-${TESTS_RUN}.json"
+    python3 - "${evidence_file}" "${field}" <<'PY' || return
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "configured-tracker",
+    "occurrences": [{"id": "review-83"}],
+    "explicit_standard": True,
+    "destination": "project-contract",
+    "contract_section": "Work artifacts",
+    "contract_field": sys.argv[2],
+    "guidance": ["configured by `docs/agents/tracker.md`"],
+}))
+PY
+    preview="$(preview_learn "${target}" "${evidence_file}")" || return
+    apply_learn_preview "${target}" "${evidence_file}" "${preview}" >/dev/null || return
+    grep -Fqx -- "- ${field}: configured by \`docs/agents/tracker.md\`" \
+      "${target}/.agents/project-contract.md" || fail "${profile} configured reference was not written"
+
+    python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["contract_field"] = "Specifications"
+path.write_text(json.dumps(data))
+PY
+    preview="$(preview_learn "${target}" "${evidence_file}")" || return
+    apply_learn_preview "${target}" "${evidence_file}" "${preview}" >/dev/null || return
+    grep -Fqx -- '- Specifications: configured by `docs/agents/tracker.md`' \
+      "${target}/.agents/project-contract.md" || \
+      fail "${profile} configured Specifications reference was not written"
+    HARNESS_PROJECT_CONTRACT="${target}/.agents/project-contract.md" \
+      HARNESS_CONTRACT_ROOT="${target}" \
+      HARNESS_CONTRACT_PROFILE="${profile}" \
+      bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+      fail "${profile} configured reference failed Contract validation"
+
+    python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["contract_field"] = "Specifications"
+data["guidance"] = ["configured by `docs/agents/missing.md`"]
+path.write_text(json.dumps(data))
+PY
+    before="$(snapshot_tree "${target}")" || return
+    if output="$(preview_learn "${target}" "${evidence_file}" 2>&1)"; then
+      fail "${profile} workflow fact accepted a missing configuration reference"
+      return
+    fi
+    [[ "${output}" == *"configuration reference"* ]] || \
+      fail "${profile} missing configuration reference refusal was unclear"
+    after="$(snapshot_tree "${target}")" || return
+    [[ "${before}" == "${after}" ]] || fail "${profile} missing reference changed the target"
+
+    python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["guidance"] = ["configured by `../outside.md`"]
+path.write_text(json.dumps(data))
+PY
+    before="$(snapshot_tree "${target}")" || return
+    if preview_learn "${target}" "${evidence_file}" >/dev/null 2>&1; then
+      fail "${profile} workflow fact accepted an unsafe configuration reference"
+      return
+    fi
+    after="$(snapshot_tree "${target}")" || return
+    [[ "${before}" == "${after}" ]] || fail "${profile} unsafe reference changed the target"
+  done
+}
+
+test_learn_branch_facts_match_repository_validator() {
+  local target setup_preview evidence_file preview field value before after output
+  target="${TEST_TEMP_ROOT}/branch-facts-${TESTS_RUN}"
+  mkdir -p "${target}"
+  git -C "${target}" init -q
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/branch-facts-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "feature-branch-policy",
+    "occurrences": [{"id": "review-84"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Workspace",
+    "contract_field": "Feature branch naming",
+    "guidance": ["`feature/*`"]
+  }'
+  preview="$(preview_learn "${target}" "${evidence_file}")" || return
+  apply_learn_preview "${target}" "${evidence_file}" "${preview}" >/dev/null || return
+  HARNESS_PROJECT_CONTRACT="${target}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${target}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "learned feature branch naming failed repository validation"
+
+  while IFS='|' read -r field value; do
+    python3 - "${evidence_file}" "${field}" "${value}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["contract_section"] = "Delivery" if sys.argv[2] == "Remote and target branch" else "Workspace"
+data["contract_field"] = sys.argv[2]
+data["guidance"] = [sys.argv[3]]
+path.write_text(json.dumps(data))
+PY
+    before="$(snapshot_tree "${target}")" || return
+    if output="$(preview_learn "${target}" "${evidence_file}" 2>&1)"; then
+      fail "workflow-fact accepted a Git-invalid branch value: ${field} ${value}"
+      return
+    fi
+    [[ "${output}" == *"invalid"* ]] || fail "unsafe ${field} refusal was unclear"
+    after="$(snapshot_tree "${target}")" || return
+    [[ "${before}" == "${after}" ]] || fail "rejected ${field} changed the target"
+  done <<'EOF'
+Feature branch naming|`feature..backup/*`
+Feature branch naming|`/feature/*`
+Feature branch naming|`feature//*`
+Feature branch naming|`.feature/*`
+Feature branch naming|`feature/*/*`
+Feature branch naming|`HEAD`
+Default branch|`main..backup`
+Default branch|`/main`
+Default branch|`main/`
+Default branch|`.hidden`
+Default branch|`release.lock`
+Default branch|`HEAD`
+Remote and target branch|`origin/main..backup`
+Remote and target branch|`origin//main`
+Remote and target branch|`origin/.hidden`
+Remote and target branch|`origin/release.lock`
+Remote and target branch|`origin/HEAD`
+EOF
+
+  while IFS='|' read -r field value; do
+    python3 - "${evidence_file}" "${field}" "${value}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["contract_section"] = "Delivery" if sys.argv[2] == "Remote and target branch" else "Workspace"
+data["contract_field"] = sys.argv[2]
+data["guidance"] = [sys.argv[3]]
+path.write_text(json.dumps(data))
+PY
+    preview="$(preview_learn "${target}" "${evidence_file}")" || return
+    apply_learn_preview "${target}" "${evidence_file}" "${preview}" >/dev/null || return
+  done <<'EOF'
+Feature branch naming|`head`
+Default branch|`head`
+Remote and target branch|`origin/head`
+EOF
+  HARNESS_PROJECT_CONTRACT="${target}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${target}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "learned lowercase head branch values failed repository validation"
+}
+
+test_learn_verification_commands_accept_validator_whitespace() {
+  local target setup_preview evidence_file preview
+  target="${TEST_TEMP_ROOT}/verification-whitespace-${TESTS_RUN}"
+  mkdir -p "${target}"
+  git -C "${target}" init -q
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/verification-whitespace-${TESTS_RUN}.json"
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "bootstrap-check",
+    "occurrences": [{"id": "review-85"}],
+    "explicit_standard": True,
+    "destination": "project-contract",
+    "contract_section": "Verification",
+    "contract_field": "Bootstrap verification",
+    "guidance": ["`make\tverify`"],
+}))
+PY
+  preview="$(preview_learn "${target}" "${evidence_file}")" || return
+  apply_learn_preview "${target}" "${evidence_file}" "${preview}" >/dev/null || return
+  HARNESS_PROJECT_CONTRACT="${target}/.agents/project-contract.md" \
+    HARNESS_CONTRACT_ROOT="${target}" \
+    HARNESS_CONTRACT_PROFILE=repository \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "tab-separated verification command failed canonical validation"
+}
+
+test_learn_rejects_tab_separated_noop_verification_commands() {
+  local target setup_preview evidence_file command before after output
+  target="${TEST_TEMP_ROOT}/noop-verification-${TESTS_RUN}"
+  mkdir -p "${target}"
+  git -C "${target}" init -q
+  setup_preview="$(preview_setup "${target}")" || return
+  apply_preview "${target}" "${setup_preview}" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/noop-verification-${TESTS_RUN}.json"
+  for command in true false : yes no; do
+    python3 - "${evidence_file}" "${command}" <<'PY' || return
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "noop-check",
+    "occurrences": [{"id": "review-87"}],
+    "explicit_standard": True,
+    "destination": "project-contract",
+    "contract_section": "Verification",
+    "contract_field": "Bootstrap verification",
+    "guidance": [f"`{sys.argv[2]}\tignored`"],
+}))
+PY
+    before="$(snapshot_tree "${target}")" || return
+    if output="$(preview_learn "${target}" "${evidence_file}" 2>&1)"; then
+      fail "learn accepted tab-separated no-op verification command: ${command}"
+      return
+    fi
+    [[ "${output}" == *"not executable"* ]] || fail "no-op command refusal was unclear"
+    after="$(snapshot_tree "${target}")" || return
+    [[ "${before}" == "${after}" ]] || fail "rejected no-op command changed the target"
+  done
+}
+
+test_learn_validates_complete_contract_candidate_before_token() {
+  new_project
+  local setup_preview contract manifest evidence_file before after output preview
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  contract="${test_project}/.agents/project-contract.md"
+  manifest="${test_project}/.agents/vibe-engineering/manifest.json"
+  python3 - "${contract}" "${manifest}" <<'PY' || return
+import hashlib, json, pathlib, sys
+contract = pathlib.Path(sys.argv[1])
+text = contract.read_text().replace("- Status: bootstrap", "- Status: complete")
+text = text.replace("- Complete verification: unconfigured", "- Complete verification: `make verify`")
+contract.write_text(text)
+manifest = pathlib.Path(sys.argv[2])
+data = json.loads(manifest.read_text())
+entry = next(item for item in data["managed"] if item["path"] == ".agents/project-contract.md")
+entry["sha256"] = hashlib.sha256(contract.read_bytes()).hexdigest()
+manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
+  HARNESS_PROJECT_CONTRACT="${contract}" HARNESS_CONTRACT_ROOT="${test_project}" \
+    HARNESS_CONTRACT_PROFILE=folder \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || return
+  evidence_file="${TEST_TEMP_ROOT}/complete-candidate-${TESTS_RUN}.json"
+  write_evidence "${evidence_file}" '{
+    "schema_version": 1,
+    "category": "workflow-fact",
+    "pattern_id": "complete-command",
+    "occurrences": [{"id": "review-88"}],
+    "explicit_standard": true,
+    "destination": "project-contract",
+    "contract_section": "Verification",
+    "contract_field": "Complete verification",
+    "guidance": ["unconfigured"]
+  }'
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_learn "${test_project}" "${evidence_file}" 2>&1)"; then
+    fail "learn issued a token for an invalid complete Contract candidate"
+    return
+  fi
+  [[ "${output}" == *"complete verification"* ]] || \
+    fail "invalid complete Contract candidate refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "invalid Contract candidate changed the target"
+
+  python3 - "${evidence_file}" <<'PY' || return
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["guidance"] = ["`make test`"]
+path.write_text(json.dumps(data))
+PY
+  preview="$(preview_learn "${test_project}" "${evidence_file}")" || return
+  apply_learn_preview "${test_project}" "${evidence_file}" "${preview}" >/dev/null || return
+  HARNESS_PROJECT_CONTRACT="${contract}" HARNESS_CONTRACT_ROOT="${test_project}" \
+    HARNESS_CONTRACT_PROFILE=folder \
+    bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh" >/dev/null || \
+    fail "representative valid complete Contract candidate failed canonical validation"
+}
+
+test_upgrade_rejects_invalid_merged_contract_candidate() {
+  new_project
+  local setup_preview before after output
+  setup_preview="$(preview_setup "${test_project}")" || return
+  apply_preview "${test_project}" "${setup_preview}" >/dev/null || return
+  new_upgrader
+  sed -i.bak 's/^- Status: bootstrap$/- Status: complete/' \
+    "${upgrader_dir}/assets/contracts/folder.md"
+  before="$(snapshot_tree "${test_project}")" || return
+  if output="$(preview_upgrade "${upgrader_dir}/scripts/project_manager.py" "${test_project}" 2>&1)"; then
+    fail "upgrade issued a token for an invalid merged Contract"
+    return
+  fi
+  [[ "${output}" == *"complete verification"* ]] || \
+    fail "invalid merged Contract refusal was unclear"
+  after="$(snapshot_tree "${test_project}")" || return
+  [[ "${before}" == "${after}" ]] || fail "invalid merged Contract preview changed the target"
 }
 
 test_learn_does_not_replace_modified_managed_guidance() {
@@ -1231,6 +1920,7 @@ run_test "setup wrong-type conflicts cannot be resolved" test_setup_wrong_type_c
 run_test "setup manifest conflicts require exact replacement" test_setup_manifest_conflict_requires_exact_replacement
 run_test "setup failure restores the complete target" test_setup_write_failure_restores_complete_tree
 run_test "setup Contracts pass their validator profiles" test_setup_contracts_pass_their_validator_profiles
+run_test "atomic writes preserve or assign portable modes" test_atomic_writes_preserve_or_assign_portable_modes
 run_test "folder setup omits repository concepts" test_folder_setup_omits_repository_concepts
 run_test "apply rejects a stale plan" test_apply_rejects_stale_plan
 run_test "plan token cannot cross targets or replay" test_plan_token_cannot_cross_targets_or_replay
@@ -1242,8 +1932,11 @@ run_test "failed validation leaves no partial setup" test_apply_validation_failu
 run_test "malformed managed markers fail closed" test_malformed_managed_markers_fail_closed
 run_test "capability selection is recorded" test_capability_selection_is_recorded
 run_test "status reports states without writing" test_status_reports_states_without_writing
+run_test "status and upgrade handle wrong-type or binary managed paths" test_status_and_upgrade_handle_wrong_type_or_binary_agents_without_writes
 run_test "status rejects incomplete manifests without writing" test_status_rejects_incomplete_manifest_without_writing
+run_test "status rejects unknown manifest fields without writing" test_status_rejects_unknown_manifest_fields_without_writing
 run_test "upgrade updates clean files and preserves project-owned Skills" test_upgrade_updates_clean_files_and_preserves_project_owned_skills
+run_test "upgrade preserves learned Project Contract facts" test_upgrade_preserves_learned_project_contract_facts
 run_test "upgrade conflicts require explicit bounded resolution" test_upgrade_conflict_requires_explicit_bounded_resolution
 run_test "upgrade reports missing, wrong-type, and unsafe paths" test_upgrade_reports_missing_wrong_type_and_unsafe_paths
 run_test "upgrade write failure rolls back the complete target" test_upgrade_write_failure_rolls_back_complete_target
@@ -1258,6 +1951,14 @@ run_test "learn binds destinations and rolls back partial Skill writes" test_lea
 run_test "learn rejects unsafe destinations and secret evidence" test_learn_rejects_unsafe_destination_and_secret_evidence
 run_test "learn routes machine checks to reviewable proposals" test_learn_routes_machine_checks_to_reviewable_proposals
 run_test "learn routes repository guidance inside the managed block" test_learn_routes_repository_guidance_inside_managed_block
+run_test "learn routes workflow facts to the Project Contract" test_learn_routes_workflow_facts_to_project_contract
+run_test "learn rejects inapplicable or conflicting Contract facts" test_learn_rejects_inapplicable_or_conflicting_contract_facts
+run_test "learn Contract configuration references match validator" test_learn_contract_configuration_references_match_validator
+run_test "learn branch facts match repository validator" test_learn_branch_facts_match_repository_validator
+run_test "learn verification commands accept validator whitespace" test_learn_verification_commands_accept_validator_whitespace
+run_test "learn rejects tab-separated no-op verification commands" test_learn_rejects_tab_separated_noop_verification_commands
+run_test "learn validates complete Contract candidates" test_learn_validates_complete_contract_candidate_before_token
+run_test "upgrade rejects invalid merged Contract candidates" test_upgrade_rejects_invalid_merged_contract_candidate
 run_test "learn preserves locally modified managed guidance" test_learn_does_not_replace_modified_managed_guidance
 
 echo "${TESTS_RUN} vibe-engineering tests, ${TESTS_FAILED} failures"

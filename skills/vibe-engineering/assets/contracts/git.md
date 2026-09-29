@@ -23,6 +23,7 @@ This file is the workflow-facing index for this project. Follow `AGENTS.md` and 
 ## Workspace
 
 - Default branch: discover from the repository
+- Feature branch naming: follow an explicit repository policy; otherwise propose a safe name
 - Preserve unrelated working-tree changes: yes
 
 ## Delivery

@@ -24,11 +24,15 @@ $skill-installer 請安裝 https://github.com/pong1013/vibe-engineering-base/tre
 | setup | 先預覽，再把選定的 Harness 能力安裝到 Git repository 或一般資料夾。 |
 | status | 不寫入檔案，將 managed paths 回報為 current、modified 或 missing。 |
 | upgrade | 預覽版本差異；使用者檢查並決定 replacement 前，修改過的 managed file 會保持 conflict。 |
-| learn | 將具體證據轉成指引、check proposal，或在達到重用門檻後建立 project Skill。 |
+| learn | 將具體證據轉成 managed guidance、Project Contract facts、check proposal，或在達到重用門檻後建立 project Skill。 |
 
 Setup 與 upgrade 使用 plan token，把核准內容綁定到目標與目前檔案狀態。寫入是 atomic。`.agents/vibe-engineering/manifest.json` 會記錄 source version、選定能力、managed paths 與 checksums，不會儲存 secrets。
 
+Upgrade 時，manifest-clean Project Contract 會保留 allowlist 內的專案值，同時採用新版 template 的結構、說明文字與新增欄位。若 Contract 有本地修改，仍會保持為可供 review 的 conflict。
+
 這個 Skill 只管理 `AGENTS.md` 中有界線的 block。既有專案內容與專案建立的 Skills 仍由專案擁有。一般資料夾不會取得 Git、CI、branch、commit 或 pull request 的假設。
+
+Learn preview 會列出所有將寫入的檔案。若要更新既有且符合目標 profile 的單一 Contract 欄位，使用明確的 `workflow-fact` category 與 `project-contract` destination。`Specifications` 與該 profile 的 tracker 欄位只有在指向既有且安全的相對設定檔時，才接受 `configured by`。Preview 會同時列出 Contract diff 與 manifest checksum 更新；若 preview 後任一檔案改變，apply 會失敗。
 
 ## Repository Skill discovery
 
