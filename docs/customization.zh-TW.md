@@ -6,6 +6,17 @@
 
 完成設定後，指引與 checks 應描述實際專案，而不是 `vibe-engineering-base`。Codex 每次都會讀取的內容應保持精簡。其他細節放到適用範圍最小的位置。
 
+## Project Contract
+
+`.agents/project-contract.md` 是 repository-aware 工作流程的穩定入口。依序保留五個區塊：Verification、Knowledge、Work artifacts、Workspace 與 Delivery。
+
+- 指向權威命令與檔案，不要複製完整內容。
+- 真正的 project checks 尚未存在時，Verification 維持 `Status: bootstrap` 與 `Complete verification: unconfigured`；設定完成後再改為 `Status: complete` 並指定完整命令。
+- 專案選定 ticket backend 與 delivery mode 後再設定。
+- 沒有政策時保持未設定，不要從偶然的歷史紀錄猜出規則。
+- 若 Contract 與 `AGENTS.md` 或可執行工具衝突，以後兩者為準；解決衝突後再更新 Contract。
+- 修改 Contract 後執行 `make verify`。
+
 ## `AGENTS.md`
 
 只保留幾乎每次修改都需要遵守的規則：
@@ -20,6 +31,8 @@
 ## 可重複執行的 project checks
 
 編輯 `scripts/harness/project-checks.sh`，讓 `make verify` 執行實際專案的 checks。每一類檢查盡量只使用一個標準命令，並保留非零 exit status。機器能檢查的 formatting、lint、type、test 與 build 規則應交給對應工具執行。
+
+設定 `PROJECT_CHECKS_CONFIGURED=1` 後，將 Project Contract 改為 `Status: complete`，並把 Complete verification 設成 `make verify`。若 Contract 宣稱 complete，但預設 project-checks script 仍明確標成未設定，validator 會拒絕。
 
 ## Repository Skills
 
@@ -44,6 +57,7 @@
 | 知識 | 位置 |
 | --- | --- |
 | 幾乎每次修改都需要遵守的規則 | `AGENTS.md` |
+| 工作流程使用的命令、位置與政策 | `.agents/project-contract.md` |
 | 可重複使用的特定任務流程 | `.agents/skills/` |
 | 機器可檢查的行為 | 測試、linters 與 verification scripts |
 | 標準 domain 詞彙 | 專案使用時放在 `CONTEXT.md` |
@@ -57,8 +71,10 @@
 
 Base `0.1.0` 不正式支援原生 Windows 與 WSL。
 
-## Base 更新
+## 既有專案的設定與更新
 
-`0.1.0` 沒有把專案範本安裝、自動合併或升級到既有 repository 的機制。完成設定後，衍生專案擁有自己的 `AGENTS.md`、Skills、scripts、測試與 workflows。後續範本變更應手動 review，不應覆蓋專案專屬檔案。
+使用 `$skill-installer` 從 `skills/vibe-engineering` 安裝 user scope Skill，接著在選定的可寫入專案資料夾使用 `$vibe-engineering`。它支援 setup、唯讀 status、可安全處理衝突的 upgrade，以及以證據為基礎的 learn intent。[Skills 指南](./skills.zh-TW.md#user-scope-vibe-engineering)提供安裝 prompt 與各 intent 的行為說明。
 
-未來安全處理衝突的 installer 需求記錄在 [`TODO.md`](../TODO.md)。
+Setup 與 upgrade 會在寫入前預覽操作。`.agents/vibe-engineering/manifest.json` 會記錄已安裝的 source version、選定能力、managed paths 與 checksums。Upgrade 可以取代未修改的 managed file；若 managed file 已在本機修改，則會維持 conflict，直到使用者 review 並明確選擇 replacement。過期的預覽或失敗的驗證不會留下部分更新。
+
+Managed set 以外的檔案、`AGENTS.md` bounded block 以外的內容，以及專案建立的 Skills 仍由專案擁有。這些檔案的變更應比照一般專案修改進行 review，不應期待 Skill 自動合併或覆蓋。

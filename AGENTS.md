@@ -5,6 +5,7 @@
 - Inspect the existing implementation, nearby documentation, and repository state before changing code.
 - Make the smallest coherent change that satisfies the request, and preserve unrelated user work.
 - Keep architecture explanations in project documentation instead of expanding this file with one-off details.
+- Read `.agents/project-contract.md` for workflow-facing verification, knowledge, workspace, and delivery entrypoints.
 
 ## Safety and compatibility
 
@@ -22,3 +23,15 @@
 
 - Replace this section with concise architecture boundaries, canonical commands, and invariants that apply to nearly every task in the project.
 - Put task-specific repeatable workflows in `.agents/skills/`, not in this always-loaded file.
+
+<!-- ai-workflow:agent-skills:start -->
+## Agent skills
+
+### Issue tracker
+
+Specifications and tickets are tracked in `pong1013/vibe-engineering-base` GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This is a single-context repository with lazy root domain documentation. See `docs/agents/domain.md`.
+<!-- ai-workflow:agent-skills:end -->
