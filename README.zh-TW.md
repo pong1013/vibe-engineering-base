@@ -8,25 +8,33 @@
 
 ### 加入既有專案
 
-使用預先安裝的 `$skill-installer`，從此 repository 安裝 user scope 的 `$vibe-engineering` Skill：
+如果你已經有專案，想讓 Codex 記住專案規則、執行可重複的檢查，並把有用的經驗整理成專案指引，請選這條路。Git repository 或一般資料夾都可以使用；不用把現有專案搬進這個 template。
 
-```text
-$skill-installer 請安裝 https://github.com/pong1013/vibe-engineering-base/tree/main/skills/vibe-engineering 的 Skill
-```
+**跟原本有什麼差別？** 設定前，Codex 每次都得從當前對話和檔案重新摸索專案規則與檢查方式。設定後，專案會有長期保存的 `AGENTS.md` 指引、指向真實命令與知識位置的 Project Contract，以及從已完成工作學習的 `harness-feedback` Skill。User scope 的 `$vibe-engineering` Skill 之後也能查看安裝狀態、預覽升級，並根據證據提議可重複使用的 project Skill。只安裝 Skill 不會修改專案；執行 setup 時會先列出預計變更，再由你決定是否套用。
 
-安裝後會從下一個 turn 開始生效。在 Codex 開啟可寫入的專案資料夾，然後執行：
+1. **安裝協助設定的 Skill。** 在 Codex 使用預先安裝的 `$skill-installer`，讓你的帳號可以呼叫 `$vibe-engineering`：
 
-```text
-$vibe-engineering 請為這個專案設定 Harness；套用前先預覽每一項變更。
-```
+   ```text
+   $skill-installer 請安裝 https://github.com/pong1013/vibe-engineering-base/tree/main/skills/vibe-engineering 的 Skill
+   ```
 
-這個 Skill 可用於既有 Git repository 或一般資料夾。它會加入專案指引、Project Contract 與 `harness-feedback`，而且不會取代 `AGENTS.md` managed block 以外的內容。若目標是一般資料夾，則不會加入 Git、CI、branch、commit 或 pull request 的假設。Setup、status、upgrade 與以證據為基礎的 learn 流程請參考 [Skills 指南](./docs/skills.zh-TW.md)。
+2. **開啟想改善的專案。** 在 Codex 開啟可寫入的專案資料夾。Skill 會從下一個 turn 開始生效；開啟目標資料夾後，它才知道要替哪個專案提出設定。
+
+3. **先請它預覽設定。** 預覽會列出檔案與修改內容，讓你看過後再決定是否套用：
+
+   ```text
+   $vibe-engineering 請為這個專案設定 Harness；套用前先預覽每一項變更。
+   ```
+
+Setup 不會取代 `AGENTS.md` managed block 以外的內容。若目標是一般資料夾，則不會加入 Git、CI、branch、commit 或 pull request 的假設。Setup、status、upgrade 與以證據為基礎的 learn 流程請參考 [Skills 指南](./docs/skills.zh-TW.md)。
 
 ### 從 Template 建立新專案
 
-1. 開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template**，建立自己的 repository。
-2. Clone 新 repository，並在 Codex 從 repository root 開啟。
-3. 貼上以下 prompt：
+如果你正要建立**全新的 Git repository**，希望一開始就有專案指引、驗證機制與 CI，請選這條路。這適合已準備好說明要做什麼，並打算接上真正測試或其他產品檢查的人。如果產品目前還沒有檢查命令，設定流程會記錄這個缺口，並讓驗證維持 bootstrap 狀態。
+
+1. **建立自己的 repository。** 開啟 [template repository](https://github.com/pong1013/vibe-engineering-base)，選擇 **Use this template**，在自己的帳號或組織下建立 repository。這會複製一份起始檔案給你的專案。
+2. **在 Codex 開啟這份複本。** Clone 新 repository，並從 repository root 開啟，讓 Codex 能檢查需要客製化的檔案。
+3. **貼上下面的設定 prompt。** 它會把起始檔案改成符合你專案的指引與檢查，遇到無法推斷的重要資訊才詢問你，並在客製化完成後執行 `make verify`。
 
 <!-- template-setup-prompt:start -->
 ```text

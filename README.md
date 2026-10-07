@@ -8,25 +8,33 @@ A language-agnostic foundation for giving Codex durable project context, repeata
 
 ### Add it to an existing project
 
-Install the user-scoped `$vibe-engineering` Skill from this repository with the preinstalled `$skill-installer`:
+Choose this path if you already have a project and want Codex to remember its rules, run repeatable checks, and turn useful lessons into project guidance. It works in a Git repository or a plain folder. Your existing project stays the starting point; you do not need to copy this template into it.
 
-```text
-$skill-installer Install the Skill from https://github.com/pong1013/vibe-engineering-base/tree/main/skills/vibe-engineering
-```
+**What changes?** Before setup, Codex has to rediscover your project's rules and checks from the current conversation and files. After setup, the project has durable `AGENTS.md` guidance, a Project Contract pointing to its real commands and knowledge, and a `harness-feedback` Skill for learning from completed work. The user-scoped `$vibe-engineering` Skill can later report installation status, preview upgrades, and propose reusable project Skills from evidence. Installing the Skill alone does not edit the project; setup shows the proposed changes before writing them.
 
-The installed Skill becomes available on the next turn. Open the writable project folder in Codex, then run:
+1. **Install the helper Skill.** In Codex, use the preinstalled `$skill-installer` to make `$vibe-engineering` available to your account:
 
-```text
-$vibe-engineering Set up the Harness for this project. Preview every change before applying it.
-```
+   ```text
+   $skill-installer Install the Skill from https://github.com/pong1013/vibe-engineering-base/tree/main/skills/vibe-engineering
+   ```
 
-The Skill can target an existing Git repository or a plain folder. It adds project guidance, a Project Contract, and `harness-feedback` without replacing content outside its managed `AGENTS.md` block. For a plain folder it omits Git, CI, branch, commit, and pull request assumptions. Setup, status, upgrade, and evidence-based learning are described in the [Skills guide](./docs/skills.md).
+2. **Open the project you want to improve.** Open its writable folder in Codex. The Skill becomes available on the next turn; opening the target folder tells it where to propose the setup.
+
+3. **Ask for a preview of the setup.** This shows the files and changes before you decide to apply them:
+
+   ```text
+   $vibe-engineering Set up the Harness for this project. Preview every change before applying it.
+   ```
+
+Setup preserves content outside its managed `AGENTS.md` block. For a plain folder it omits Git, CI, branch, commit, and pull request assumptions. Setup, status, upgrade, and evidence-based learning are described in the [Skills guide](./docs/skills.md).
 
 ### Start a new project from the template
 
-1. Open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create your repository.
-2. Clone or open the new repository at its root in Codex.
-3. Paste this prompt:
+Choose this path if you are starting a **new Git repository** and want project guidance, verification, and CI in place from the beginning. It suits someone ready to describe what they are building and to connect real tests or other product checks. If the product does not have checks yet, the setup records that gap and leaves verification in bootstrap status.
+
+1. **Create your own repository.** Open the [template repository](https://github.com/pong1013/vibe-engineering-base), select **Use this template**, and create a repository under your account or organization. This gives your project its own copy of the starter files.
+2. **Open that copy in Codex.** Clone or open the new repository at its root so Codex can inspect the files it needs to customize.
+3. **Give Codex the setup prompt below.** It turns the starter files into guidance and checks for your actual project. It asks for important details it cannot infer, then runs `make verify` after customization.
 
 <!-- template-setup-prompt:start -->
 ```text
