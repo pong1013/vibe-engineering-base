@@ -2,13 +2,13 @@
 
 set -euo pipefail
 
-# Set this to 1 after replacing the warning branch with this project's
-# canonical test, lint, build, or other verification commands.
-PROJECT_CHECKS_CONFIGURED=0
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_CHECKS_CONFIGURED=1
 
 if [[ "${PROJECT_CHECKS_CONFIGURED}" != "1" ]]; then
   echo "WARNING: project checks are not configured. Edit scripts/harness/project-checks.sh." >&2
   exit 0
 fi
 
-# Add project-specific verification commands below this line.
+bash "${ROOT_DIR}/scripts/harness/validate-skills.sh"
+bash "${ROOT_DIR}/scripts/harness/validate-project-contract.sh"

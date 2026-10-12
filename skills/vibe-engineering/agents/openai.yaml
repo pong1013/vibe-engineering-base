@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vibe Engineering"
+  short_description: "Configure and teach a durable project AI Harness"
+  default_prompt: "Use $vibe-engineering to configure or improve the Harness for this project."

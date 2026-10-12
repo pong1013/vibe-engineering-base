@@ -2,9 +2,39 @@
 
 [English](./skills.md) | [繁體中文](./skills.zh-TW.md) | [Back to README](../README.md)
 
-This guide explains when to use repository Skills, how Codex loads them, and which files they may affect. Repository Skills package repeatable, task-specific workflows with the project. They complement the always-loaded `AGENTS.md`; they do not replace it.
+This project uses two kinds of Codex Skill:
 
-## How Codex discovers Skills
+- a user-scoped `$vibe-engineering` Skill, installed once and used to configure or maintain a selected project folder;
+- repository Skills under `.agents/skills/`, which travel with a project and encode its repeatable workflows.
+
+Skills complement the always-loaded `AGENTS.md`; they do not replace durable repository guidance.
+
+## User-scoped `$vibe-engineering`
+
+Install the source at `skills/vibe-engineering` with the preinstalled `$skill-installer`:
+
+```text
+$skill-installer Install the Skill from https://github.com/pong1013/vibe-engineering-base/tree/main/skills/vibe-engineering
+```
+
+The installed Skill is available on the next turn. It accepts a current or explicit absolute project directory and supports four intents:
+
+| Intent | Behavior |
+| --- | --- |
+| setup | Previews and then installs selected Harness capabilities in a Git repository or plain folder. |
+| status | Reports managed paths as current, modified, or missing without writing. |
+| upgrade | Previews version changes; modified managed files remain conflicts until the user reviews a replacement decision. |
+| learn | Routes concrete evidence to managed guidance, Project Contract facts, check proposals, or a project Skill when its reuse threshold is met. |
+
+Setup and upgrade bind approval to the target and current file state with a plan token. Writes are atomic. The manifest at `.agents/vibe-engineering/manifest.json` records the source version, selected capabilities, managed paths, and checksums without storing secrets.
+
+During upgrade, a manifest-clean Project Contract keeps its allowlisted project values while adopting new template structure, prose, and newly introduced fields. A locally modified Contract stays a reviewable conflict.
+
+The Skill owns only its bounded block in `AGENTS.md`. Existing project content and project-created Skills remain project-owned. A plain folder receives no Git, CI, branch, commit, or pull request assumptions.
+
+Learn previews every file it will write. Use the explicit `workflow-fact` category with destination `project-contract` to update one existing, profile-compatible Contract field. `Specifications` and the profile's tracker field accept `configured by` only with an existing safe relative configuration file. The preview includes both the Contract diff and manifest checksum update, and apply fails if either file changed after preview.
+
+## Repository Skill discovery
 
 Codex scans `.agents/skills/` from the current working directory up to the repository root. Skill information is loaded progressively:
 
@@ -12,77 +42,26 @@ Codex scans `.agents/skills/` from the current working directory up to the repos
 2. The full `SKILL.md` body is loaded only when Codex selects or is explicitly given that Skill.
 3. Referenced files and scripts are read or run only when the workflow needs them.
 
-An implicitly enabled Skill is eligible for selection when its `description` matches a request; it does not run on every task. Explicit invocation uses `$skill-name` in the prompt. Invocation policy is defined in `agents/openai.yaml`:
+An implicitly enabled Skill is eligible for selection when its description matches a request; it does not run on every task. Explicit invocation uses `$skill-name`. Invocation policy is defined in `agents/openai.yaml`. See the official [Codex Skills documentation](https://learn.chatgpt.com/docs/build-skills).
 
-```yaml
-policy:
-  allow_implicit_invocation: false
-```
-
-With `false`, Codex does not implicitly select the Skill, but `$skill-name` remains available. See the official [Codex Skills documentation](https://learn.chatgpt.com/docs/build-skills).
-
-## Bundled Skills
+## Bundled repository Skill
 
 | Skill | Invocation | Responsibility |
 | --- | --- | --- |
 | `harness-feedback` | Implicit-eligible or `$harness-feedback` | Uses evidence from completed work, reviews, and repeated mistakes to propose focused improvements to durable repository guardrails. |
-| `grill-with-docs` | Explicit-only with `$grill-with-docs` | Challenges an important or ambiguous plan before implementation and records settled domain language and durable architecture decisions. |
 
-The folder under `examples/project-skill/` is not active because it is outside `.agents/skills/`. Copy and customize it only when the project has a real repeatable workflow with a distinct trigger.
+Use `harness-feedback` after concrete evidence exposes a reusable lesson. It routes machine-recognizable failures into tests or verification, repository-wide guidance into `AGENTS.md`, and repeatable task-specific judgment into a Skill. It should recommend no change when the lesson is one-off or already covered.
 
-## `harness-feedback`
+Depending on the approved request, it may update `AGENTS.md`, an existing Skill, tests, or Harness verification. It is not a mandatory closing step for ordinary edits.
 
-Use this after concrete evidence exposes a reusable lesson. It routes machine-recognizable failures into tests or verification, repository-wide guidance into `AGENTS.md`, and repeatable task-specific judgment into a Skill. It should recommend no change when the lesson is one-off or already covered.
+The folder under `examples/project-skill/` is inactive because it is outside `.agents/skills/`. Copy and customize it only when the project has a repeatable workflow with a distinct trigger.
 
-Depending on the request you approve, it may update `AGENTS.md`, an existing Skill, tests, or Harness verification. It is not a mandatory closing step for ordinary edits.
+## Add or remove a repository Skill
 
-## `grill-with-docs`
-
-Use this before implementation when the product direction, domain language, behavior, boundaries, or architecture choices are not yet settled.
-
-```text
-$grill-with-docs <idea, feature, plan, or design>
-        ↓
-Inspect the repository and existing project knowledge
-        ↓
-Ask one decision question and recommend an answer
-        ↓
-Wait for the user to confirm, reject, or refine it
-        ↓
-Record qualifying language or architecture decisions
-        ↓
-Continue until the important decision branches are settled
-```
-
-The Skill does not implement the proposed product change and does not generate a complete specification. Continue in the same conversation and request a reviewable implementation plan so uncaptured decisions remain available.
-
-### Generated files
-
-For a repository with one domain context:
-
-```text
-CONTEXT.md
-docs/adr/NNNN-short-slug.md
-```
-
-`CONTEXT.md` is created or updated only when project-specific canonical vocabulary is settled. An ADR is created only when a decision is hard to reverse, surprising without its rationale, and based on a real trade-off.
-
-If an existing `CONTEXT-MAP.md` defines multiple contexts, the Skill updates the mapped `<context>/CONTEXT.md` and places context-specific ADRs under that context's `docs/adr/`. It does not create `CONTEXT-MAP.md` automatically.
-
-These files are normal project documentation: review and commit them. They are not ignored by Git. Most answers do not qualify as glossary entries or ADRs and remain only in the conversation.
-
-### Effect on this base repository
-
-No glossary or ADR is pre-generated by `vibe-engineering-base`. In a derived project, generated files correctly describe that project. In the uncustomized source base, the same files would become template content inherited by future projects, so the Skill warns and waits for confirmation before writing them.
-
-This repository carries a self-contained Codex adaptation of Matt Pocock's [`grill-with-docs`](https://github.com/mattpocock/skills/blob/main/docs/engineering/grill-with-docs.md), `grilling`, and `domain-modeling` workflows. Its upstream MIT notice is stored with the Skill.
-
-## Add or remove a Skill
-
-- Add an active repository Skill under `.agents/skills/<skill-name>/SKILL.md`.
+- Put an active repository Skill at `.agents/skills/<skill-name>/SKILL.md`.
 - Include matching `agents/openai.yaml` metadata and choose an invocation policy deliberately.
 - Keep the description narrow enough to avoid unrelated implicit selection.
-- Run `make verify` so the Harness checks active Skill names, required metadata fields, invocation policy shape, and unfinished placeholders.
-- Remove a Skill directory when its workflow should not travel with the derived project.
+- Run `make verify` so the Harness checks active Skill names, required metadata, invocation policy, and unfinished placeholders.
+- Remove a Skill directory when its workflow should no longer travel with the project.
 
 For a starting structure, copy `examples/project-skill/` into `.agents/skills/<skill-name>/`, then replace every generic name and instruction with the project's actual workflow.
